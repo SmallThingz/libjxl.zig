@@ -262,6 +262,10 @@ pub const Codestream = struct {
         std.debug.assert(@bitOffsetOf(cf.type, cf.name) == @bitOffsetOf(f.type, f.name));
       }
     }
+
+    pub fn initDefault(info: *Codestream.BasicInfo) void {
+      c.JxlEncoderInitBasicInfo(@ptrCast(info));
+    }
   };
 
   /// Information for a single extra channel.
@@ -289,6 +293,10 @@ pub const Codestream = struct {
         std.debug.assert(@sizeOf(cf.type) == @sizeOf(f.type));
         std.debug.assert(@bitOffsetOf(cf.type, cf.name) == @bitOffsetOf(f.type, f.name));
       }
+    }
+
+    pub fn initDefault(info: *Codestream.ExtraChannelInfo, channel_type: Codestream.ExtraChannelType) void {
+      c.JxlEncoderInitExtraChannelInfo(@intFromEnum(channel_type), @ptrCast(info));
     }
   };
 
@@ -334,6 +342,10 @@ pub const Frame = struct {
         std.debug.assert(@sizeOf(cf.type) == @sizeOf(f.type));
         std.debug.assert(@bitOffsetOf(cf.type, cf.name) == @bitOffsetOf(f.type, f.name));
       }
+    }
+
+    pub fn initDefault(blend_info: *Frame.BlendInfo) void {
+      c.JxlEncoderInitBlendInfo(@ptrCast(blend_info));
     }
   };
 
@@ -383,7 +395,1109 @@ pub const Frame = struct {
         std.debug.assert(@bitOffsetOf(cf.type, cf.name) == @bitOffsetOf(f.type, f.name));
       }
     }
+
+    pub fn initDefault(header: *Frame.Header) void {
+      c.JxlEncoderInitFrameHeader(@ptrCast(header));
+    }
   };
+};
+
+/// Opaque structure that holds the JPEG XL decoder.
+///
+/// Allocated and initialized with @ref JxlDecoderCreate().
+/// Cleaned up and deallocated with @ref JxlDecoderDestroy().
+pub const Decoder = opaque {
+  /// Decoder library version.
+  ///
+  /// @return the decoder library version as an integer:
+  /// MAJOR_VERSION * 1000000 + MINOR_VERSION * 1000 + PATCH_VERSION. For example,
+  /// version 1.2.3 would return 1002003.
+  pub fn version() u32 {
+    return c.JxlDecoderVersion();
+  }
+
+  /// The result of @ref JxlSignatureCheck.
+  pub const Signature = enum(c.JxlSignature) {
+    /// Not enough bytes were passed to determine if a valid signature was found.
+    not_enough_bytes = @bitCast(c.JXL_SIG_NOT_ENOUGH_BYTES),
+
+    /// No valid JPEG XL header was found.
+    invalid = @bitCast(c.JXL_SIG_INVALID),
+
+    /// A valid JPEG XL codestream signature was found, that is a JPEG XL image
+    /// without container.
+    codestream = @bitCast(c.JXL_SIG_CODESTREAM),
+
+    /// A valid container signature was found, that is a JPEG XL image embedded
+    /// in a box format container.
+    container = @bitCast(c.JXL_SIG_CONTAINER),
+  };
+
+  /// JPEG XL signature identification.
+  ///
+  /// Checks if the passed buffer contains a valid JPEG XL signature. The passed @p
+  /// buf of size @p size doesn't need to be a full image, only the beginning of the file.
+  ///
+  /// @return a flag indicating if a JPEG XL signature was found and what type.
+  pub fn signatureCheck(buf: []const u8) Signature {
+    return @enumFromInt(c.JxlSignatureCheck(buf.ptr, buf.len));
+  }
+
+  /// Creates an instance of @ref JxlDecoder and initializes it.
+  ///
+  /// @p memory_manager will be used for all the library dynamic allocations made
+  /// from this instance. The parameter may be NULL, in which case the default
+  /// allocator will be used. See jxl/memory_manager.h for details.
+  ///
+  /// @param memory_manager custom allocator function. It may be NULL. The memory
+  ///        manager will be copied internally.
+  /// @return pointer to initialized @ref JxlDecoder otherwise
+  pub fn create(memory_manager: ?*const MemoryManager) !*@This() {
+    return @ptrCast(c.JxlDecoderCreate(@ptrCast(memory_manager)) orelse return error.OutOfMemory);
+  }
+
+  /// Re-initializes a @ref JxlDecoder instance, so it can be re-used for decoding
+  /// another image. All state and settings are reset as if the object was
+  /// newly created with @ref JxlDecoderCreate, but the memory manager is kept.
+  ///
+  /// @param dec instance to be re-initialized.
+  pub fn reset(dec: *@This()) void {
+    c.JxlDecoderReset(@ptrCast(dec));
+  }
+
+  /// Deinitializes and frees @ref JxlDecoder instance.
+  ///
+  /// @param dec instance to be cleaned up and deallocated.
+  pub fn deinit(dec: *@This()) void {
+    c.JxlDecoderDestroy(@ptrCast(dec));
+  }
+
+  /// Return value for @ref JxlDecoderProcessInput.
+  /// The values from ::JXL_DEC_BASIC_INFO onwards are optional informative
+  /// events that can be subscribed to, they are never returned if they
+  /// have not been registered with @ref JxlDecoderSubscribeEvents.
+  pub const DecoderStatus = enum(c.JxlDecoderStatus) {
+    /// Function call finished successfully, or decoding is finished and there is
+    /// nothing more to be done.
+    success = @bitCast(c.JXL_DEC_SUCCESS),
+
+    /// An error occurred, for example invalid input file or out of memory.
+    @"error" = @bitCast(c.JXL_DEC_ERROR),
+
+    /// The decoder needs more input bytes to continue. Before the next @ref
+    /// JxlDecoderProcessInput call, more input data must be set, by calling @ref
+    /// JxlDecoderReleaseInput (if input was set previously) and then calling @ref
+    /// JxlDecoderSetInput.
+    need_more_input = @bitCast(c.JXL_DEC_NEED_MORE_INPUT),
+
+    /// The decoder is able to decode a preview image and requests setting a
+    /// preview output buffer using @ref JxlDecoderSetPreviewOutBuffer.
+    need_preview_out_buffer = @bitCast(c.JXL_DEC_NEED_PREVIEW_OUT_BUFFER),
+
+    /// The decoder requests an output buffer to store the full resolution image,
+    /// which can be set with @ref JxlDecoderSetImageOutBuffer or with @ref
+    /// JxlDecoderSetImageOutCallback.
+    need_image_out_buffer = @bitCast(c.JXL_DEC_NEED_IMAGE_OUT_BUFFER),
+
+    /// The JPEG reconstruction buffer is too small for reconstructed JPEG
+    /// codestream to fit. @ref JxlDecoderSetJPEGBuffer must be called again to
+    /// make room for remaining bytes.
+    jpeg_need_more_output = @bitCast(c.JXL_DEC_JPEG_NEED_MORE_OUTPUT),
+
+    /// The box contents output buffer is too small. @ref JxlDecoderSetBoxBuffer
+    /// must be called again to make room for remaining bytes.
+    box_need_more_output = @bitCast(c.JXL_DEC_BOX_NEED_MORE_OUTPUT),
+
+    /// Informative event: Basic information such as image dimensions and
+    /// extra channels. This event occurs max once per image.
+    basic_info = @bitCast(c.JXL_DEC_BASIC_INFO),
+
+    /// Informative event: Color encoding or ICC profile from the
+    /// codestream header.
+    color_encoding = @bitCast(c.JXL_DEC_COLOR_ENCODING),
+
+    /// Informative event: Preview image, a small frame, decoded.
+    preview_image = @bitCast(c.JXL_DEC_PREVIEW_IMAGE),
+
+    /// Informative event: Beginning of a frame. @ref
+    /// JxlDecoderGetFrameHeader can be used at this point.
+    frame = @bitCast(c.JXL_DEC_FRAME),
+
+    /// Informative event: full frame (or layer, in case coalescing is
+    /// disabled) is decoded.
+    full_image = @bitCast(c.JXL_DEC_FULL_IMAGE),
+
+    /// Informative event: JPEG reconstruction data decoded.
+    jpeg_reconstruction = @bitCast(c.JXL_DEC_JPEG_RECONSTRUCTION),
+
+    /// Informative event: The header of a box of the container format
+    /// (BMFF) is decoded.
+    box = @bitCast(c.JXL_DEC_BOX),
+
+    /// Informative event: a progressive step in decoding the frame is
+    /// reached.
+    frame_progression = @bitCast(c.JXL_DEC_FRAME_PROGRESSION),
+
+    /// The box being decoded is now complete. This is only emitted if a buffer
+    /// was set for the box.
+    box_complete = @bitCast(c.JXL_DEC_BOX_COMPLETE),
+  };
+
+  /// Types of progressive detail.
+  /// Setting a progressive detail with value N implies all progressive details
+  /// with smaller or equal value.
+  pub const ProgressiveDetail = enum(c.JxlProgressiveDetail) {
+    /// after completed kRegularFrames
+    frames = @bitCast(c.kFrames),
+    /// after completed DC (1:8)
+    dc = @bitCast(c.kDC),
+    /// after completed AC passes that are the last pass for their resolution
+    /// target.
+    last_passes = @bitCast(c.kLastPasses),
+    /// after completed AC passes that are not the last pass for their resolution
+    /// target.
+    passes = @bitCast(c.kPasses),
+    /// during DC frame when lower resolution are completed (1:32, 1:16)
+    dc_progressive = @bitCast(c.kDCProgressive),
+    /// after completed groups
+    dc_groups = @bitCast(c.kDCGroups),
+    /// after completed groups
+    groups = @bitCast(c.kGroups),
+  };
+
+  /// Rewinds decoder to the beginning. The same input must be given again from
+  /// the beginning of the file and the decoder will emit events from the beginning
+  /// again. When rewinding (as opposed to @ref JxlDecoderReset), the decoder can
+  /// keep state about the image, which it can use to skip to a requested frame
+  /// more efficiently with @ref JxlDecoderSkipFrames. Settings such as parallel
+  /// runner or subscribed events are kept.
+  pub fn rewind(dec: *@This()) void {
+    c.JxlDecoderRewind(@ptrCast(dec));
+  }
+
+  /// Makes the decoder skip the next `amount` frames. It still needs to process
+  /// the input, but will not output the frame events. It can be more efficient
+  /// when skipping frames, and even more so when using this after @ref
+  /// JxlDecoderRewind.
+  pub fn skipFrames(dec: *@This(), amount: usize) void {
+    c.JxlDecoderSkipFrames(@ptrCast(dec), amount);
+  }
+
+  /// Skips processing the current frame. Can be called after frame processing
+  /// already started, signaled by a ::JXL_DEC_NEED_IMAGE_OUT_BUFFER event,
+  /// but before the corresponding ::JXL_DEC_FULL_IMAGE event.
+  pub fn skipCurrentFrame(dec: *@This()) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderSkipCurrentFrame(@ptrCast(dec)));
+  }
+
+  /// Set the parallel runner for multithreading. May only be set before starting
+  /// decoding.
+  pub fn setParallelRunner(
+    dec: *@This(),
+    parallel_runner: ParallelRunner,
+    parallel_runner_opaque: ?*anyopaque,
+  ) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderSetParallelRunner(@ptrCast(dec), parallel_runner, parallel_runner_opaque));
+  }
+
+  /// Returns a hint indicating how many more bytes the decoder is expected to
+  /// need to make @ref JxlDecoderGetBasicInfo available after the next @ref
+  /// JxlDecoderProcessInput call.
+  pub fn sizeHintBasicInfo(dec: *const @This()) usize {
+    return c.JxlDecoderSizeHintBasicInfo(@ptrCast(dec));
+  }
+
+  /// Select for which informative events, i.e. ::JXL_DEC_BASIC_INFO, etc., the
+  /// decoder should return with a status.
+  pub fn subscribeEvents(dec: *@This(), events_wanted: i32) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderSubscribeEvents(@ptrCast(dec), events_wanted));
+  }
+
+  /// Enables or disables preserving of as-in-bitstream pixeldata
+  /// orientation.
+  pub fn setKeepOrientation(dec: *@This(), skip_reorientation: Types.Bool) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderSetKeepOrientation(@ptrCast(dec), @intFromEnum(skip_reorientation)));
+  }
+
+  /// Enables or disables preserving of associated alpha channels. If
+  /// unpremul_alpha is set to ::JXL_FALSE then for associated alpha channel,
+  /// the pixel data is returned with premultiplied colors.
+  pub fn setUnpremultiplyAlpha(dec: *@This(), unpremul_alpha: Types.Bool) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderSetUnpremultiplyAlpha(@ptrCast(dec), @intFromEnum(unpremul_alpha)));
+  }
+
+  /// Enables or disables rendering spot colors. By default, spot colors
+  /// are rendered, which is OK for viewing the decoded image.
+  pub fn setRenderSpotcolors(dec: *@This(), render_spotcolors: Types.Bool) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderSetRenderSpotcolors(@ptrCast(dec), @intFromEnum(render_spotcolors)));
+  }
+
+  /// Enables or disables coalescing of zero-duration frames. By default, frames
+  /// are returned with coalescing enabled, i.e. all frames have the image
+  /// dimensions, and are blended if needed.
+  pub fn setCoalescing(dec: *@This(), coalescing: Types.Bool) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderSetCoalescing(@ptrCast(dec), @intFromEnum(coalescing)));
+  }
+
+  /// Decodes JPEG XL file using the available bytes. Requires input has been
+  /// set with @ref JxlDecoderSetInput.
+  pub fn processInput(dec: *@This()) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderProcessInput(@ptrCast(dec)));
+  }
+
+  /// Sets input data for @ref JxlDecoderProcessInput. The data is owned by the
+  /// caller and may be used by the decoder until @ref JxlDecoderReleaseInput is
+  /// called or the decoder is destroyed or reset so must be kept alive until then.
+  pub fn setInput(dec: *@This(), data: []const u8) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderSetInput(@ptrCast(dec), data.ptr, data.len));
+  }
+
+  /// Releases input which was provided with @ref JxlDecoderSetInput.
+  pub fn releaseInput(dec: *@This()) usize {
+    return c.JxlDecoderReleaseInput(@ptrCast(dec));
+  }
+
+  /// Marks the input as finished, indicates that no more @ref JxlDecoderSetInput
+  /// will be called.
+  pub fn closeInput(dec: *@This()) void {
+    c.JxlDecoderCloseInput(@ptrCast(dec));
+  }
+
+  /// Outputs the basic image information, such as image dimensions, bit depth and
+  /// all other JxlBasicInfo fields, if available.
+  pub fn getBasicInfo(dec: *const @This(), info: ?*Codestream.BasicInfo) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderGetBasicInfo(@ptrCast(dec), @ptrCast(info)));
+  }
+
+  /// Outputs information for extra channel at the given index. The index must be
+  /// smaller than num_extra_channels in the associated @ref JxlBasicInfo.
+  pub fn getExtraChannelInfo(dec: *const @This(), index: usize, info: ?*Codestream.ExtraChannelInfo) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderGetExtraChannelInfo(@ptrCast(dec), index, @ptrCast(info)));
+  }
+
+  /// Outputs name for extra channel at the given index in UTF-8.
+  pub fn getExtraChannelName(dec: *const @This(), index: usize, name: []u8) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderGetExtraChannelName(@ptrCast(dec), index, name.ptr, name.len));
+  }
+
+  /// Defines which color profile to get: the profile from the codestream
+  /// metadata header, which represents the color profile of the original image,
+  /// or the color profile from the pixel data produced by the decoder. Both are
+  /// the same if the JxlBasicInfo has uses_original_profile set.
+  pub const ColorProfileTarget = enum(c.JxlColorProfileTarget) {
+    /// Get the color profile of the original image from the metadata.
+    original = @bitCast(c.JXL_COLOR_PROFILE_TARGET_ORIGINAL),
+
+    /// Get the color profile of the pixel data the decoder outputs.
+    data = @bitCast(c.JXL_COLOR_PROFILE_TARGET_DATA),
+  };
+
+  /// Outputs the color profile as JPEG XL encoded structured data, if available.
+  /// This is an alternative to an ICC Profile, which can represent a more limited
+  /// amount of color spaces, but represents them exactly through enum values.
+  pub fn getColorAsEncodedProfile(
+    dec: *const @This(),
+    target: ColorProfileTarget,
+    color_encoding: ?*ColorEncoding,
+  ) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderGetColorAsEncodedProfile(@ptrCast(dec), @intFromEnum(target), @ptrCast(color_encoding)));
+  }
+
+  /// Outputs the size in bytes of the ICC profile returned by @ref
+  /// JxlDecoderGetColorAsICCProfile, if available, or indicates there is none
+  /// available.
+  pub fn getICCProfileSize(
+    dec: *const @This(),
+    target: ColorProfileTarget,
+    size: ?*usize,
+  ) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderGetICCProfileSize(@ptrCast(dec), @intFromEnum(target), size));
+  }
+
+  /// Outputs ICC profile if available. The profile is only available if @ref
+  /// JxlDecoderGetICCProfileSize returns success.
+  pub fn getColorAsICCProfile(
+    dec: *const @This(),
+    target: ColorProfileTarget,
+    icc_profile: []u8,
+  ) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderGetColorAsICCProfile(@ptrCast(dec), @intFromEnum(target), icc_profile.ptr, icc_profile.len));
+  }
+
+  /// Sets the desired output color profile of the decoded image by calling
+  /// @ref JxlDecoderSetOutputColorProfile, passing on @c color_encoding and
+  /// setting @c icc_data to NULL.
+  pub fn setPreferredColorProfile(
+    dec: *@This(),
+    color_encoding: *const ColorEncoding,
+  ) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderSetPreferredColorProfile(@ptrCast(dec), @ptrCast(color_encoding)));
+  }
+
+  /// Requests that the decoder perform tone mapping to the peak display luminance
+  /// passed as @c desired_intensity_target, if appropriate.
+  pub fn setDesiredIntensityTarget(
+    dec: *@This(),
+    desired_intensity_target: f32,
+  ) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderSetDesiredIntensityTarget(@ptrCast(dec), desired_intensity_target));
+  }
+
+  /// Sets the desired output color profile of the decoded image either from a
+  /// color encoding or an ICC profile. Valid calls of this function have either @c
+  /// color_encoding or @c icc_data set to NULL.
+  pub fn setOutputColorProfile(
+    dec: *@This(),
+    color_encoding: ?*const ColorEncoding,
+    icc_data: ?[]const u8,
+  ) DecoderStatus {
+    const icc_ptr = if (icc_data) |d| d.ptr else null;
+    const icc_size = if (icc_data) |d| d.len else 0;
+    return @enumFromInt(c.JxlDecoderSetOutputColorProfile(@ptrCast(dec), @ptrCast(color_encoding), icc_ptr, icc_size));
+  }
+
+  /// Sets the color management system (CMS) that will be used for color
+  /// conversion (if applicable) during decoding.
+  pub fn setCms(dec: *@This(), cms: Cms.Interface) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderSetCms(@ptrCast(dec), @bitCast(cms)));
+  }
+
+  /// Returns the minimum size in bytes of the preview image output pixel buffer
+  /// for the given format.
+  pub fn previewOutBufferSize(
+    dec: *const @This(),
+    format: *const Types.PixelFormat,
+    size: *usize,
+  ) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderPreviewOutBufferSize(@ptrCast(dec), @ptrCast(format), size));
+  }
+
+  /// Sets the buffer to write the low-resolution preview image to.
+  pub fn setPreviewOutBuffer(
+    dec: *@This(),
+    format: *const Types.PixelFormat,
+    buffer: []u8,
+  ) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderSetPreviewOutBuffer(@ptrCast(dec), @ptrCast(format), buffer.ptr, buffer.len));
+  }
+
+  /// Outputs the information from the frame, such as duration when have_animation.
+  pub fn getFrameHeader(dec: *const @This(), header: ?*Frame.Header) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderGetFrameHeader(@ptrCast(dec), @ptrCast(header)));
+  }
+
+  /// Outputs name for the current frame.
+  pub fn getFrameName(dec: *const @This(), name: []u8) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderGetFrameName(@ptrCast(dec), name.ptr, name.len));
+  }
+
+  /// Outputs the blend information for the current frame for a specific extra
+  /// channel.
+  pub fn getExtraChannelBlendInfo(
+    dec: *const @This(),
+    index: usize,
+    blend_info: *Frame.BlendInfo,
+  ) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderGetExtraChannelBlendInfo(@ptrCast(dec), index, @ptrCast(blend_info)));
+  }
+
+  /// Returns the minimum size in bytes of the image output pixel buffer for the
+  /// given format.
+  pub fn imageOutBufferSize(
+    dec: *const @This(),
+    format: *const Types.PixelFormat,
+    size: *usize,
+  ) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderImageOutBufferSize(@ptrCast(dec), @ptrCast(format), size));
+  }
+
+  /// Sets the buffer to write the full resolution image to.
+  pub fn setImageOutBuffer(
+    dec: *@This(),
+    format: *const Types.PixelFormat,
+    buffer: []u8,
+  ) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderSetImageOutBuffer(@ptrCast(dec), @ptrCast(format), buffer.ptr, buffer.len));
+  }
+
+  /// Function type for @ref JxlDecoderSetImageOutCallback.
+  ///
+  /// The callback may be called simultaneously by different threads when using a
+  /// threaded parallel runner, on different pixels.
+  ///
+  /// @param opaque optional user data, as given to @ref
+  ///     JxlDecoderSetImageOutCallback.
+  /// @param x horizontal position of leftmost pixel of the pixel data.
+  /// @param y vertical position of the pixel data.
+  /// @param num_pixels amount of pixels included in the pixel data, horizontally.
+  ///     This is not the same as xsize of the full image, it may be smaller.
+  /// @param pixels pixel data as a horizontal stripe, in the format passed to @ref
+  ///     JxlDecoderSetImageOutCallback. The memory is not owned by the user, and
+  ///     is only valid during the time the callback is running.
+  pub const ImageOutCallback = ?*const fn (
+    @"opaque": ?*anyopaque,
+    x: usize,
+    y: usize,
+    num_pixels: usize,
+    pixels: ?*const anyopaque,
+  ) callconv(.c) void;
+
+  /// Initialization callback for @ref JxlDecoderSetMultithreadedImageOutCallback.
+  ///
+  /// @param init_opaque optional user data, as given to @ref
+  ///     JxlDecoderSetMultithreadedImageOutCallback.
+  /// @param num_threads maximum number of threads that will call the @c run
+  ///     callback concurrently.
+  /// @param num_pixels_per_thread maximum number of pixels that will be passed in
+  ///     one call to @c run.
+  /// @return a pointer to data that will be passed to the @c run callback, or
+  ///     @c NULL if initialization failed.
+  pub const ImageOutInitCallback = ?*const fn (
+    init_opaque: ?*anyopaque,
+    num_threads: usize,
+    num_pixels_per_thread: usize,
+  ) callconv(.c) ?*anyopaque;
+
+  /// Worker callback for @ref JxlDecoderSetMultithreadedImageOutCallback.
+  ///
+  /// @param run_opaque user data returned by the @c init callback.
+  /// @param thread_id number in `[0, num_threads)` identifying the thread of the
+  ///     current invocation of the callback.
+  /// @param x horizontal position of the first (leftmost) pixel of the pixel data.
+  /// @param y vertical position of the pixel data.
+  /// @param num_pixels number of pixels in the pixel data. May be less than the
+  ///     full @c xsize of the image, and will be at most equal to the @c
+  ///     num_pixels_per_thread that was passed to @c init.
+  /// @param pixels pixel data as a horizontal stripe, in the format passed to @ref
+  ///     JxlDecoderSetMultithreadedImageOutCallback. The data pointed to
+  ///     remains owned by the caller and is only guaranteed to outlive the current
+  ///     callback invocation.
+  pub const ImageOutRunCallback = ?*const fn (
+    run_opaque: ?*anyopaque,
+    thread_id: usize,
+    x: usize,
+    y: usize,
+    num_pixels: usize,
+    pixels: ?*const anyopaque,
+  ) callconv(.c) void;
+
+  /// Destruction callback for @ref JxlDecoderSetMultithreadedImageOutCallback,
+  /// called after all invocations of the @c run callback to perform any
+  /// appropriate clean-up of the @c run_opaque data returned by @c init.
+  ///
+  /// @param run_opaque user data returned by the @c init callback.
+  pub const ImageOutDestroyCallback = ?*const fn (
+    run_opaque: ?*anyopaque,
+  ) callconv(.c) void;
+
+  /// Sets pixel output callback. This is an alternative to @ref
+  /// JxlDecoderSetImageOutBuffer.
+  pub fn setImageOutCallback(
+    dec: *@This(),
+    format: *const Types.PixelFormat,
+    callback: ImageOutCallback,
+    opaque_ptr: ?*anyopaque,
+  ) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderSetImageOutCallback(@ptrCast(dec), @ptrCast(format), callback, opaque_ptr));
+  }
+
+  /// Similar to @ref JxlDecoderSetImageOutCallback except that the callback is
+  /// allowed an initialization phase.
+  pub fn setMultithreadedImageOutCallback(
+    dec: *@This(),
+    format: *const Types.PixelFormat,
+    init_callback: ImageOutInitCallback,
+    run_callback: ImageOutRunCallback,
+    destroy_callback: ImageOutDestroyCallback,
+    init_opaque: ?*anyopaque,
+  ) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderSetMultithreadedImageOutCallback(
+      @ptrCast(dec),
+      @ptrCast(format),
+      init_callback,
+      run_callback,
+      destroy_callback,
+      init_opaque,
+    ));
+  }
+
+  /// Returns the minimum size in bytes of an extra channel pixel buffer for the
+  /// given format.
+  pub fn extraChannelBufferSize(
+    dec: *const @This(),
+    format: *const Types.PixelFormat,
+    size: *usize,
+    index: u32,
+  ) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderExtraChannelBufferSize(@ptrCast(dec), @ptrCast(format), size, index));
+  }
+
+  /// Sets the buffer to write an extra channel to.
+  pub fn setExtraChannelBuffer(
+    dec: *@This(),
+    format: *const Types.PixelFormat,
+    buffer: []u8,
+    index: u32,
+  ) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderSetExtraChannelBuffer(@ptrCast(dec), @ptrCast(format), buffer.ptr, buffer.len, index));
+  }
+
+  /// Sets output buffer for reconstructed JPEG codestream.
+  pub fn setJPEGBuffer(dec: *@This(), data: []u8) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderSetJPEGBuffer(@ptrCast(dec), data.ptr, data.len));
+  }
+
+  /// Releases buffer which was provided with @ref JxlDecoderSetJPEGBuffer.
+  pub fn releaseJPEGBuffer(dec: *@This()) usize {
+    return c.JxlDecoderReleaseJPEGBuffer(@ptrCast(dec));
+  }
+
+  /// Sets output buffer for box output codestream.
+  pub fn setBoxBuffer(dec: *@This(), data: []u8) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderSetBoxBuffer(@ptrCast(dec), data.ptr, data.len));
+  }
+
+  /// Releases buffer which was provided with @ref JxlDecoderSetBoxBuffer.
+  pub fn releaseBoxBuffer(dec: *@This()) usize {
+    return c.JxlDecoderReleaseBoxBuffer(@ptrCast(dec));
+  }
+
+  /// Configures whether to get boxes in raw mode or in decompressed mode.
+  pub fn setDecompressBoxes(dec: *@This(), decompress: Types.Bool) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderSetDecompressBoxes(@ptrCast(dec), @intFromEnum(decompress)));
+  }
+
+  /// Outputs the type of the current box, after a ::JXL_DEC_BOX event occurred.
+  /// @param decompressed: JXL_FALSE to get the raw box type ("brob"), JXL_TRUE to get underlying type.
+  pub fn getBoxType(dec: *@This(), out_type: *Types.BoxType, decompressed: Types.Bool) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderGetBoxType(@ptrCast(dec), out_type, @intFromEnum(decompressed)));
+  }
+
+  /// Returns the size of a box as it appears in the container file, after the @ref
+  /// JXL_DEC_BOX event. This includes all the box headers.
+  pub fn getBoxSizeRaw(dec: *const @This(), size: *u64) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderGetBoxSizeRaw(@ptrCast(dec), size));
+  }
+
+  /// Returns the size of the contents of a box, after the @ref
+  /// JXL_DEC_BOX event. This does not include any of the headers of the box.
+  pub fn getBoxSizeContents(dec: *const @This(), size: *u64) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderGetBoxSizeContents(@ptrCast(dec), size));
+  }
+
+  /// Configures at which progressive steps in frame decoding these @ref
+  /// JXL_DEC_FRAME_PROGRESSION event occurs.
+  pub fn setProgressiveDetail(dec: *@This(), detail: ProgressiveDetail) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderSetProgressiveDetail(@ptrCast(dec), @intFromEnum(detail)));
+  }
+
+  /// Returns the intended downsampling ratio for the progressive frame produced
+  /// by @ref JxlDecoderFlushImage.
+  pub fn getIntendedDownsamplingRatio(dec: *@This()) usize {
+    return c.JxlDecoderGetIntendedDownsamplingRatio(@ptrCast(dec));
+  }
+
+  /// Outputs progressive step towards the decoded image so far when only partial
+  /// input was received.
+  pub fn flushImage(dec: *@This()) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderFlushImage(@ptrCast(dec)));
+  }
+
+  /// Sets the bit depth of the output buffer or callback.
+  pub fn setImageOutBitDepth(dec: *@This(), bit_depth: *const Types.BitDepth) DecoderStatus {
+    return @enumFromInt(c.JxlDecoderSetImageOutBitDepth(@ptrCast(dec), @ptrCast(bit_depth)));
+  }
+};
+
+/// Opaque structure that holds the JPEG XL encoder.
+///
+/// Allocated and initialized with @ref JxlEncoderCreate().
+/// Cleaned up and deallocated with @ref JxlEncoderDestroy().
+pub const Encoder = opaque {
+  /// Encoder library version.
+  ///
+  /// @return the encoder library version as an integer:
+  /// MAJOR_VERSION * 1000000 + MINOR_VERSION * 1000 + PATCH_VERSION. For example,
+  /// version 1.2.3 would return 1002003.
+  pub fn version() u32 {
+    return c.JxlEncoderVersion();
+  }
+
+  /// Return value for multiple encoder functions.
+  pub const Status = enum(c.JxlEncoderStatus) {
+    /// Function call finished successfully, or encoding is finished and there is
+    /// nothing more to be done.
+    success = @bitCast(c.JXL_ENC_SUCCESS),
+
+    /// An error occurred, for example out of memory.
+    @"error" = @bitCast(c.JXL_ENC_ERROR),
+
+    /// The encoder needs more output buffer to continue encoding.
+    need_more_output = @bitCast(c.JXL_ENC_NEED_MORE_OUTPUT),
+
+    pub fn check(self: @This()) !void {
+      return switch (self) {
+        .success => {},
+        .@"error" => error.EncoderError,
+        .need_more_output => error.EncoderNeedMoreOutput,
+      };
+    }
+  };
+
+  /// Error conditions:
+  /// API usage errors have the 0x80 bit set to 1
+  /// Other errors have the 0x80 bit set to 0
+  pub const Error = enum(c.JxlEncoderError) {
+    /// No error
+    ok = @bitCast(c.JXL_ENC_ERR_OK),
+    /// Generic encoder error due to unspecified cause
+    generic = @bitCast(c.JXL_ENC_ERR_GENERIC),
+    /// Out of memory
+    oom = @bitCast(c.JXL_ENC_ERR_OOM),
+    /// JPEG bitstream reconstruction data could not be represented
+    jbrd = @bitCast(c.JXL_ENC_ERR_JBRD),
+    /// Input is invalid
+    bad_input = @bitCast(c.JXL_ENC_ERR_BAD_INPUT),
+    /// The encoder doesn't (yet) support this.
+    not_supported = @bitCast(c.JXL_ENC_ERR_NOT_SUPPORTED),
+    /// The encoder API is used in an incorrect way.
+    api_usage = @bitCast(c.JXL_ENC_ERR_API_USAGE),
+  };
+
+  /// Id of encoder options for a frame.
+  pub const FrameSettingId = enum(c.JxlEncoderFrameSettingId) {
+    /// Sets encoder effort/speed level without affecting decoding speed. 
+    effort = @bitCast(c.JXL_ENC_FRAME_SETTING_EFFORT),
+    /// Sets the decoding speed tier for the provided options. 
+    decoding_speed = @bitCast(c.JXL_ENC_FRAME_SETTING_DECODING_SPEED),
+    /// Sets resampling option. 
+    resampling = @bitCast(c.JXL_ENC_FRAME_SETTING_RESAMPLING),
+    /// Similar to resampling, but for extra channels.
+    extra_channel_resampling = @bitCast(c.JXL_ENC_FRAME_SETTING_EXTRA_CHANNEL_RESAMPLING),
+    /// Indicates the frame added is already downsampled.
+    already_downsampled = @bitCast(c.JXL_ENC_FRAME_SETTING_ALREADY_DOWNSAMPLED),
+    /// Adds noise to the image emulating photographic film noise.
+    photon_noise = @bitCast(c.JXL_ENC_FRAME_SETTING_PHOTON_NOISE),
+    /// Enables adaptive noise generation.
+    noise = @bitCast(c.JXL_ENC_FRAME_SETTING_NOISE),
+    /// Enables or disables dots generation.
+    dots = @bitCast(c.JXL_ENC_FRAME_SETTING_DOTS),
+    /// Enables or disables patches generation.
+    patches = @bitCast(c.JXL_ENC_FRAME_SETTING_PATCHES),
+    /// Edge preserving filter level, -1 to 3.
+    epf = @bitCast(c.JXL_ENC_FRAME_SETTING_EPF),
+    /// Enables or disables the gaborish filter.
+    gaborish = @bitCast(c.JXL_ENC_FRAME_SETTING_GABORISH),
+    /// Enables modular encoding.
+    modular = @bitCast(c.JXL_ENC_FRAME_SETTING_MODULAR),
+    /// Enables or disables preserving color of invisible pixels.
+    keep_invisible = @bitCast(c.JXL_ENC_FRAME_SETTING_KEEP_INVISIBLE),
+    /// Determines the order in which 256x256 regions are stored.
+    group_order = @bitCast(c.JXL_ENC_FRAME_SETTING_GROUP_ORDER),
+    /// Determines the horizontal position of center for center-first group order.
+    group_order_center_x = @bitCast(c.JXL_ENC_FRAME_SETTING_GROUP_ORDER_CENTER_X),
+    /// Determines the center for the center-first group order.
+    group_order_center_y = @bitCast(c.JXL_ENC_FRAME_SETTING_GROUP_ORDER_CENTER_Y),
+    /// Enables or disables progressive encoding for modular mode.
+    responsive = @bitCast(c.JXL_ENC_FRAME_SETTING_RESPONSIVE),
+    /// Set the progressive mode for the AC coefficients of VarDCT (spectral).
+    progressive_ac = @bitCast(c.JXL_ENC_FRAME_SETTING_PROGRESSIVE_AC),
+    /// Set the progressive mode for AC (quantization).
+    qprogressive_ac = @bitCast(c.JXL_ENC_FRAME_SETTING_QPROGRESSIVE_AC),
+    /// Set the progressive mode using lower-resolution DC images for VarDCT.
+    progressive_dc = @bitCast(c.JXL_ENC_FRAME_SETTING_PROGRESSIVE_DC),
+    /// Use Global channel palette if colors < % of range.
+    channel_colors_global_percent = @bitCast(c.JXL_ENC_FRAME_SETTING_CHANNEL_COLORS_GLOBAL_PERCENT),
+    /// Use Local channel palette if colors < % of range.
+    channel_colors_group_percent = @bitCast(c.JXL_ENC_FRAME_SETTING_CHANNEL_COLORS_GROUP_PERCENT),
+    /// Use color palette if amount of colors <= this amount.
+    palette_colors = @bitCast(c.JXL_ENC_FRAME_SETTING_PALETTE_COLORS),
+    /// Enables or disables delta palette.
+    lossy_palette = @bitCast(c.JXL_ENC_FRAME_SETTING_LOSSY_PALETTE),
+    /// Color transform for internal encoding.
+    color_transform = @bitCast(c.JXL_ENC_FRAME_SETTING_COLOR_TRANSFORM),
+    /// Reversible color transform for modular encoding.
+    modular_color_space = @bitCast(c.JXL_ENC_FRAME_SETTING_MODULAR_COLOR_SPACE),
+    /// Group size for modular encoding.
+    modular_group_size = @bitCast(c.JXL_ENC_FRAME_SETTING_MODULAR_GROUP_SIZE),
+    /// Predictor for modular encoding.
+    modular_predictor = @bitCast(c.JXL_ENC_FRAME_SETTING_MODULAR_PREDICTOR),
+    /// Fraction of pixels used to learn MA trees as a percentage.
+    modular_ma_tree_learning_percent = @bitCast(c.JXL_ENC_FRAME_SETTING_MODULAR_MA_TREE_LEARNING_PERCENT),
+    /// Number of extra (previous-channel) MA tree properties to use.
+    modular_nb_prev_channels = @bitCast(c.JXL_ENC_FRAME_SETTING_MODULAR_NB_PREV_CHANNELS),
+    /// Enable or disable CFL for lossless JPEG recompression.
+    jpeg_recon_cfl = @bitCast(c.JXL_ENC_FRAME_SETTING_JPEG_RECON_CFL),
+    /// Prepare the frame for indexing in the frame index box.
+    frame_index_box = @bitCast(c.JXL_ENC_FRAME_INDEX_BOX),
+    /// Sets brotli encode effort for use in JPEG recompression.
+    brotli_effort = @bitCast(c.JXL_ENC_FRAME_SETTING_BROTLI_EFFORT),
+    /// Enables or disables brotli compression of metadata boxes from JPEG.
+    jpeg_compress_boxes = @bitCast(c.JXL_ENC_FRAME_SETTING_JPEG_COMPRESS_BOXES),
+    /// Control what kind of buffering is used.
+    buffering = @bitCast(c.JXL_ENC_FRAME_SETTING_BUFFERING),
+    /// Keep or discard Exif metadata boxes derived from a JPEG frame.
+    jpeg_keep_exif = @bitCast(c.JXL_ENC_FRAME_SETTING_JPEG_KEEP_EXIF),
+    /// Keep or discard XMP metadata boxes derived from a JPEG frame.
+    jpeg_keep_xmp = @bitCast(c.JXL_ENC_FRAME_SETTING_JPEG_KEEP_XMP),
+    /// Keep or discard JUMBF metadata boxes derived from a JPEG frame.
+    jpeg_keep_jumbf = @bitCast(c.JXL_ENC_FRAME_SETTING_JPEG_KEEP_JUMBF),
+    /// Enable/Disable quality decisions based on full image heuristics.
+    use_full_image_heuristics = @bitCast(c.JXL_ENC_FRAME_SETTING_USE_FULL_IMAGE_HEURISTICS),
+    /// Disable perceptual optimizations.
+    disable_perceptual_heuristics = @bitCast(c.JXL_ENC_FRAME_SETTING_DISABLE_PERCEPTUAL_HEURISTICS),
+  };
+
+  /// Creates an instance of @ref JxlEncoder and initializes it.
+  pub fn create(memory_manager: ?*const MemoryManager) !*@This() {
+    return @ptrCast(c.JxlEncoderCreate(@ptrCast(memory_manager)) orelse return error.OutOfMemory);
+  }
+
+  /// Deinitializes and frees @ref JxlEncoder instance.
+  pub fn deinit(self: *@This()) void {
+    c.JxlEncoderDestroy(@ptrCast(self));
+  }
+
+  /// Re-initializes a @ref JxlEncoder instance, so it can be re-used for encoding
+  /// another image.
+  pub fn reset(self: *@This()) void {
+    c.JxlEncoderReset(@ptrCast(self));
+  }
+
+  /// Sets the color management system (CMS) that will be used for color conversion
+  /// (if applicable) during encoding.
+  pub fn setCms(self: *@This(), cms: Cms.Interface) void {
+    c.JxlEncoderSetCms(@ptrCast(self), @bitCast(cms));
+  }
+
+  /// Set the parallel runner for multithreading. May only be set before starting
+  /// encoding.
+  pub fn setParallelRunner(
+    self: *@This(),
+    parallel_runner: ParallelRunner.ParallelRunner,
+    parallel_runner_opaque: ?*anyopaque,
+  ) Status {
+    return @enumFromInt(c.JxlEncoderSetParallelRunner(@ptrCast(self), parallel_runner, parallel_runner_opaque));
+  }
+
+  /// Get the (last) error code in case ::JXL_ENC_ERROR was returned.
+  pub fn getError(self: *@This()) Error {
+    return @enumFromInt(c.JxlEncoderGetError(@ptrCast(self)));
+  }
+
+  /// Encodes a JPEG XL file using the available bytes.
+  /// @param next_out: pointer to next bytes to write to.
+  /// @param avail_out: amount of bytes available starting from *next_out.
+  pub fn processOutput(self: *@This(), next_out: *[*]u8, avail_out: *usize) Status {
+    return @enumFromInt(c.JxlEncoderProcessOutput(@ptrCast(self), @ptrCast(next_out), avail_out));
+  }
+
+  /// Function type for @ref JxlEncoderSetDebugImageCallback.
+  pub const DebugImageCallback = ?*const fn (
+    @"opaque": ?*anyopaque,
+    label: [*c]const u8,
+    xsize: usize,
+    ysize: usize,
+    color: ?*const ColorEncoding,
+    pixels: [*c]const u16,
+  ) callconv(.c) void;
+
+  /// Settings and metadata for a single image frame. This includes encoder options
+  /// for a frame such as compression quality and speed.
+  ///
+  /// Allocated and initialized with @ref JxlEncoderFrameSettingsCreate().
+  /// Cleaned up and deallocated when the encoder is destroyed with
+  /// @ref JxlEncoderDestroy().
+  pub const FrameSettings = opaque {
+    /// Sets the frame information for this frame to the encoder.
+    pub fn setFrameHeader(self: *@This(), frame_header: *const Frame.Header) Status {
+      return @enumFromInt(c.JxlEncoderSetFrameHeader(@ptrCast(self), @ptrCast(frame_header)));
+    }
+
+    /// Sets blend info of an extra channel.
+    pub fn setExtraChannelBlendInfo(self: *@This(), index: usize, blend_info: *const Frame.BlendInfo) Status {
+      return @enumFromInt(c.JxlEncoderSetExtraChannelBlendInfo(@ptrCast(self), index, @ptrCast(blend_info)));
+    }
+
+    /// Sets the name of the animation frame. 
+    /// The maximum possible name length is 1071 bytes.
+    pub fn setFrameName(self: *@This(), frame_name: [*:0]const u8) Status {
+      return @enumFromInt(c.JxlEncoderSetFrameName(@ptrCast(self), frame_name));
+    }
+
+    /// Sets the bit depth of the input buffer.
+    pub fn setFrameBitDepth(self: *@This(), bit_depth: *const Types.BitDepth) Status {
+      return @enumFromInt(c.JxlEncoderSetFrameBitDepth(@ptrCast(self), @ptrCast(bit_depth)));
+    }
+
+    /// Sets the buffer to read JPEG encoded bytes from for the next frame to encode.
+    pub fn addJPEGFrame(self: *const @This(), buffer: []const u8) Status {
+      return @enumFromInt(c.JxlEncoderAddJPEGFrame(@ptrCast(self), buffer.ptr, buffer.len));
+    }
+
+    /// Sets the buffer to read pixels from for the next image to encode.
+    pub fn addImageFrame(self: *const @This(), format: *const Types.PixelFormat, buffer: []const u8) Status {
+      return @enumFromInt(c.JxlEncoderAddImageFrame(@ptrCast(self), @ptrCast(format), @ptrCast(buffer.ptr), buffer.len));
+    }
+
+    /// Adds a frame to the encoder using a chunked input source.
+    pub fn addChunkedFrame(
+      self: *const @This(),
+      is_last_frame: Types.Bool,
+      chunked_frame_input: ChunkedFrameInputSource,
+    ) Status {
+      return @enumFromInt(c.JxlEncoderAddChunkedFrame(
+        @ptrCast(self),
+        @intFromEnum(is_last_frame),
+        @bitCast(chunked_frame_input),
+      ));
+    }
+
+    /// Sets the buffer to read pixels from for an extra channel at a given index.
+    pub fn setExtraChannelBuffer(
+      self: *const @This(),
+      format: *const Types.PixelFormat,
+      buffer: []const u8,
+      index: u32,
+    ) Status {
+      return @enumFromInt(c.JxlEncoderSetExtraChannelBuffer(
+        @ptrCast(self),
+        @ptrCast(format),
+        @ptrCast(buffer.ptr),
+        buffer.len,
+        index,
+      ));
+    }
+
+    /// Create a new set of encoder options, tied to the encoder.
+    pub fn init(enc: *Encoder, source: ?*const @This()) !*@This() {
+      return @ptrCast(c.JxlEncoderFrameSettingsCreate(@ptrCast(enc), @ptrCast(source)) orelse return error.OutOfMemory);
+    }
+
+    /// Sets a frame-specific option of integer type.
+    pub fn setOption(self: *@This(), option: FrameSettingId, value: i64) Status {
+      return @enumFromInt(c.JxlEncoderFrameSettingsSetOption(@ptrCast(self), @intFromEnum(option), value));
+    }
+
+    /// Sets a frame-specific option of float type.
+    pub fn setFloatOption(self: *@This(), option: FrameSettingId, value: f32) Status {
+      return @enumFromInt(c.JxlEncoderFrameSettingsSetFloatOption(@ptrCast(self), @intFromEnum(option), value));
+    }
+
+    /// Enables lossless encoding for this frame.
+    pub fn setLossless(self: *@This(), lossless: Types.Bool) Status {
+      return @enumFromInt(c.JxlEncoderSetFrameLossless(@ptrCast(self), @intFromEnum(lossless)));
+    }
+
+    /// Sets the distance level for lossy compression (0.0 .. 25.0).
+    pub fn setDistance(self: *@This(), distance: f32) Status {
+      return @enumFromInt(c.JxlEncoderSetFrameDistance(@ptrCast(self), distance));
+    }
+
+    /// Sets the distance level for lossy compression of extra channels.
+    pub fn setExtraChannelDistance(self: *@This(), index: usize, distance: f32) Status {
+      return @enumFromInt(c.JxlEncoderSetExtraChannelDistance(@ptrCast(self), index, distance));
+    }
+
+    /// Sets the given debug image callback.
+    pub fn setDebugImageCallback(self: *@This(), callback: DebugImageCallback, opaque_ptr: ?*anyopaque) void {
+      c.JxlEncoderSetDebugImageCallback(@ptrCast(self), callback, opaque_ptr);
+    }
+
+    /// Sets the given stats object for gathering statistics during encoding.
+    pub fn collectStats(self: *@This(), stats: *EncoderStats) void {
+      c.JxlEncoderCollectStats(@ptrCast(self), @ptrCast(stats));
+    }
+  };
+
+  /// Interface for the encoder's output processing (streaming).
+  pub const OutputProcessor = extern struct {
+    @"opaque": ?*anyopaque,
+    get_buffer: *const fn (@"opaque": ?*anyopaque, size: *usize) callconv(.c) ?*anyopaque,
+    release_buffer: *const fn (@"opaque": ?*anyopaque, written_bytes: usize) callconv(.c) void,
+    seek: ?*const fn (@"opaque": ?*anyopaque, position: u64) callconv(.c) void,
+    set_finalized_position: *const fn (@"opaque": ?*anyopaque, finalized_position: u64) callconv(.c) void,
+
+    test {
+      std.debug.assert(@sizeOf(@This()) == @sizeOf(c.JxlEncoderOutputProcessor));
+      inline for (@typeInfo(c.JxlEncoderOutputProcessor).@"struct".fields, @typeInfo(@This()).@"struct".fields) |cf, f| {
+        std.debug.assert(@sizeOf(cf.type) == @sizeOf(f.type));
+        std.debug.assert(@bitOffsetOf(cf.type, cf.name) == @bitOffsetOf(f.type, f.name));
+      }
+    }
+
+    /// Creates an OutputProcessor from a Zig struct.
+    /// The context must have:
+    /// - `fn getBuffer(self: *@This(), size: *usize) ?*anyopaque`
+    /// - `fn releaseBuffer(self: *@This(), written_bytes: usize) void`
+    /// - `fn setFinalizedPosition(self: *@This(), pos: u64) void`
+    /// - optional `fn seek(self: *@This(), pos: u64) void`
+    pub fn fromContext(ctx_ptr: anytype) @This() {
+      const T = @TypeOf(ctx_ptr);
+      const PtrInfo = @typeInfo(T).pointer;
+      const Sub = PtrInfo.child;
+
+      const VTable = struct {
+        fn getSelf(ctx: ?*anyopaque) *Sub { return @alignCast(@ptrCast(ctx.?)); }
+        fn getBuffer(ctx: ?*anyopaque, size: *usize) callconv(.c) ?*anyopaque { return getSelf(ctx).getBuffer(size); }
+        fn releaseBuffer(ctx: ?*anyopaque, written: usize) callconv(.c) void { getSelf(ctx).releaseBuffer(written); }
+        fn seek(ctx: ?*anyopaque, pos: u64) callconv(.c) void { getSelf(ctx).seek(pos); }
+        fn setFinalized(ctx: ?*anyopaque, pos: u64) callconv(.c) void { getSelf(ctx).setFinalizedPosition(pos); }
+      };
+
+      return .{
+        .@"opaque" = ctx_ptr,
+        .get_buffer = &VTable.getBuffer,
+        .release_buffer = &VTable.releaseBuffer,
+        .seek = if (@hasDecl(Sub, "seek")) &VTable.seek else null,
+        .set_finalized_position = &VTable.setFinalized,
+      };
+    }
+  };
+
+  /// Interface to pass pixel data in a streaming manner.
+  pub const ChunkedFrameInputSource = extern struct {
+    @"opaque": ?*anyopaque,
+    get_color_channels_pixel_format: *const fn (@"opaque": ?*anyopaque, format: *Types.PixelFormat) callconv(.c) void,
+    get_color_channel_data_at: *const fn (@"opaque": ?*anyopaque, xpos: usize, ypos: usize, xsize: usize, ysize: usize, row_offset: *usize) callconv(.c) ?*const anyopaque,
+    get_extra_channel_pixel_format: *const fn (@"opaque": ?*anyopaque, ec_index: usize, format: *Types.PixelFormat) callconv(.c) void,
+    get_extra_channel_data_at: *const fn (@"opaque": ?*anyopaque, ec_index: usize, xpos: usize, ypos: usize, xsize: usize, ysize: usize, row_offset: *usize) callconv(.c) ?*const anyopaque,
+    release_buffer: *const fn (@"opaque": ?*anyopaque, buf: ?*const anyopaque) callconv(.c) void,
+
+    test {
+      std.debug.assert(@sizeOf(@This()) == @sizeOf(c.JxlChunkedFrameInputSource));
+      inline for (@typeInfo(c.JxlChunkedFrameInputSource).@"struct".fields, @typeInfo(@This()).@"struct".fields) |cf, f| {
+        std.debug.assert(@sizeOf(cf.type) == @sizeOf(f.type));
+        std.debug.assert(@bitOffsetOf(cf.type, cf.name) == @bitOffsetOf(f.type, f.name));
+      }
+    }
+
+    /// Creates a ChunkedFrameInputSource from a Zig struct.
+    pub fn fromContext(ctx_ptr: anytype) @This() {
+      const T = @TypeOf(ctx_ptr);
+      const PtrInfo = @typeInfo(T).pointer;
+      const Sub = PtrInfo.child;
+
+      const VTable = struct {
+        fn getSelf(ctx: ?*anyopaque) *Sub { return @alignCast(@ptrCast(ctx.?)); }
+        fn getColorFmt(ctx: ?*anyopaque, fmt: *Types.PixelFormat) callconv(.c) void { getSelf(ctx).getColorChannelsPixelFormat(fmt); }
+        fn getColorData(ctx: ?*anyopaque, x: usize, y: usize, xs: usize, ys: usize, ro: *usize) callconv(.c) ?*const anyopaque { return getSelf(ctx).getColorChannelDataAt(x, y, xs, ys, ro); }
+        fn getExtraFmt(ctx: ?*anyopaque, idx: usize, fmt: *Types.PixelFormat) callconv(.c) void { getSelf(ctx).getExtraChannelPixelFormat(idx, fmt); }
+        fn getExtraData(ctx: ?*anyopaque, idx: usize, x: usize, y: usize, xs: usize, ys: usize, ro: *usize) callconv(.c) ?*const anyopaque { return getSelf(ctx).getExtraChannelDataAt(idx, x, y, xs, ys, ro); }
+        fn release(ctx: ?*anyopaque, buf: ?*const anyopaque) callconv(.c) void { getSelf(ctx).releaseBuffer(buf); }
+      };
+
+      return .{
+        .@"opaque" = ctx_ptr,
+        .get_color_channels_pixel_format = &VTable.getColorFmt,
+        .get_color_channel_data_at = &VTable.getColorData,
+        .get_extra_channel_pixel_format = &VTable.getExtraFmt,
+        .get_extra_channel_data_at = &VTable.getExtraData,
+        .release_buffer = &VTable.release,
+      };
+    }
+  };
+
+  /// Sets the output processor for the encoder. This processor determines how the
+  /// encoder will handle buffering, writing, seeking, and setting a finalized position.
+  /// This should not be used when using @ref JxlEncoderProcessOutput.
+  pub fn setOutputProcessor(self: *@This(), output_processor: OutputProcessor) Status {
+    return @enumFromInt(c.JxlEncoderSetOutputProcessor(@ptrCast(self), @bitCast(output_processor)));
+  }
+
+  /// Flushes any buffered input in the encoder.
+  /// This function can only be used after @ref JxlEncoderSetOutputProcessor.
+  pub fn flushInput(self: *@This()) Status {
+    return @enumFromInt(c.JxlEncoderFlushInput(@ptrCast(self)));
+  }
+
+  /// Adds a metadata box to the file format. @ref JxlEncoderUseBoxes must
+  /// be enabled before using this function.
+  pub fn addBox(self: *@This(), box_type: *const Types.BoxType, contents: []const u8, compress_box: Types.Bool) Status {
+    return @enumFromInt(c.JxlEncoderAddBox(@ptrCast(self), box_type, contents.ptr, contents.len, @intFromEnum(compress_box)));
+  }
+
+  /// Indicates the intention to add metadata boxes.
+  pub fn useBoxes(self: *@This()) Status {
+    return @enumFromInt(c.JxlEncoderUseBoxes(@ptrCast(self)));
+  }
+
+  /// Declares that no further boxes will be added.
+  pub fn closeBoxes(self: *@This()) void {
+    c.JxlEncoderCloseBoxes(@ptrCast(self));
+  }
+
+  /// Declares that no frames will be added.
+  pub fn closeFrames(self: *@This()) void {
+    c.JxlEncoderCloseFrames(@ptrCast(self));
+  }
+
+  /// Closes any input to the encoder.
+  pub fn closeInput(self: *@This()) void {
+    c.JxlEncoderCloseInput(@ptrCast(self));
+  }
+
+  /// Sets the original color encoding as structured data.
+  pub fn setColorEncoding(self: *@This(), color: *const ColorEncoding) Status {
+    return @enumFromInt(c.JxlEncoderSetColorEncoding(@ptrCast(self), @ptrCast(color)));
+  }
+
+  /// Sets the original color encoding as an ICC color profile.
+  pub fn setICCProfile(self: *@This(), icc_profile: []const u8) Status {
+    return @enumFromInt(c.JxlEncoderSetICCProfile(@ptrCast(self), icc_profile.ptr, icc_profile.len));
+  }
+
+  /// Sets the global metadata of the image.
+  pub fn setBasicInfo(self: *@This(), info: *const Codestream.BasicInfo) Status {
+    return @enumFromInt(c.JxlEncoderSetBasicInfo(@ptrCast(self), @ptrCast(info)));
+  }
+
+  /// Sets the upsampling method the decoder will use.
+  /// factor: 1, 2, 4 or 8.
+  /// mode: -1 (default), 0 (nearest neighbor), 1 (pixel dots).
+  pub fn setUpsamplingMode(self: *@This(), factor: i64, mode: i64) Status {
+    return @enumFromInt(c.JxlEncoderSetUpsamplingMode(@ptrCast(self), factor, mode));
+  }
+
+  /// Sets information for the extra channel at the given index.
+  pub fn setExtraChannelInfo(self: *@This(), index: usize, info: *const Codestream.ExtraChannelInfo) Status {
+    return @enumFromInt(c.JxlEncoderSetExtraChannelInfo(@ptrCast(self), index, @ptrCast(info)));
+  }
+
+  /// Sets the name for the extra channel at the given index in UTF-8.
+  pub fn setExtraChannelName(self: *@This(), index: usize, name: [*:0]const u8) Status {
+    return @enumFromInt(c.JxlEncoderSetExtraChannelName(@ptrCast(self), index, name, std.mem.sliceTo(name, 0).len));
+  }
+
+  /// Forces the encoder to use the box-based container format (BMFF).
+  pub fn useContainer(self: *@This(), use: Types.Bool) Status {
+    return @enumFromInt(c.JxlEncoderUseContainer(@ptrCast(self), @intFromEnum(use)));
+  }
+
+  /// Configure the encoder to store JPEG reconstruction metadata.
+  pub fn storeJPEGMetadata(self: *@This(), store: Types.Bool) Status {
+    return @enumFromInt(c.JxlEncoderStoreJPEGMetadata(@ptrCast(self), @intFromEnum(store)));
+  }
+
+  /// Sets the feature level of the JPEG XL codestream (5, 10, or -1).
+  pub fn setCodestreamLevel(self: *@This(), level: i32) Status {
+    return @enumFromInt(c.JxlEncoderSetCodestreamLevel(@ptrCast(self), level));
+  }
+
+  /// Returns the codestream level required to support the currently configured settings.
+  pub fn getRequiredCodestreamLevel(self: *const @This()) i32 {
+    return c.JxlEncoderGetRequiredCodestreamLevel(@ptrCast(self));
+  }
+
+  /// Enables usage of expert options (e.g., effort 11).
+  pub fn allowExpertOptions(self: *@This()) void {
+    c.JxlEncoderAllowExpertOptions(@ptrCast(self));
+  }
+
+  /// Maps JPEG-style quality factor to distance.
+  pub fn distanceFromQuality(quality: f32) f32 {
+    return c.JxlEncoderDistanceFromQuality(quality);
+  }
 };
 
 /// Color encoding of the image as structured information.
@@ -518,6 +1632,14 @@ pub const ColorEncoding = extern struct {
     /// ICC-absolute
     absolute = @bitCast(c.JXL_RENDERING_INTENT_ABSOLUTE),
   };
+
+  pub fn setToSRGB(self: *@This(), is_gray: Types.Bool) void {
+    c.JxlColorEncodingSetToSRGB(@ptrCast(self), @intFromEnum(is_gray));
+  }
+
+  pub fn setToLinearSRGB(self: *@This(), is_gray: Types.Bool) void {
+    c.JxlColorEncodingSetToLinearSRGB(@ptrCast(self), @intFromEnum(is_gray));
+  }
 };
 
 pub const ICC = struct {
