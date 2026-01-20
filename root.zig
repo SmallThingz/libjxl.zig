@@ -1546,8 +1546,8 @@ pub const Encoder = opaque {
 
   /// Adds a metadata box to the file format. @ref JxlEncoderUseBoxes must
   /// be enabled before using this function.
-  pub fn addBox(self: *@This(), box_type: *const Types.BoxType, contents: []const u8, compress_box: Types.Bool) Status {
-    return @enumFromInt(c.JxlEncoderAddBox(@ptrCast(self), box_type, contents.ptr, contents.len, @intFromEnum(compress_box)));
+  pub fn addBox(self: *@This(), box_type: *const Types.BoxType, contents: []const u8, compress_box: bool) Status {
+    return @enumFromInt(c.JxlEncoderAddBox(@ptrCast(self), @as(*const [4]u8, @ptrCast(box_type)), contents.ptr, contents.len, @intFromBool(compress_box)));
   }
 
   /// Indicates the intention to add metadata boxes.
