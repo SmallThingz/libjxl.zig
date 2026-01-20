@@ -19,9 +19,32 @@ const c = @cImport({
   @cInclude("jxl/version.h");
 });
 
+pub const InitOptions = struct {
+  /// This must be true for you to be able to call Codestream.BasicInfo.default
+  codestream_basic_info: bool = true,
+  /// This must be true for you to be able to call Codestream.ExtraChannelInfo.default
+  codestream_extra_channel_info: bool = true,
+  /// This must be true for you to be able to call Frame.BlendInfo.default
+  frame_blend_info: bool = true,
+  /// This must be true for you to be able to call Frame.Header.default
+  frame_header: bool = true,
+};
+
+pub fn init(options: InitOptions) !void {
+  if (options.codestream_basic_info) Codestream.BasicInfo._default_value = ._default();
+  if (options.codestream_extra_channel_info) {
+    inline for (@typeInfo(Codestream.ExtraChannelInfo._DefaultValues).@"struct".fields) |f| {
+      @field(Codestream.ExtraChannelInfo._default_values, f.name) = ._default(@field(Codestream.ExtraChannelType, f.name));
+    }
+  }
+  if (options.frame_blend_info) Frame.BlendInfo._default_value = ._default();
+  if (options.frame_header) Frame.Header._default_value = ._default();
+  Encoder._version_value = Encoder._version();
+  Decoder._version_value = Decoder._version();
+}
+
 pub const Cms = struct {
-  /// Represents an input or output colorspace to a color transform, as a
-  /// serialized ICC profile.
+  /// Represents an input or output colorspace to a color transform, as a serialized ICC profile.
   pub const ColorProfile = extern struct {
     /// The serialized ICC profile. This is guaranteed to be present and valid.
     icc: ICCData,
@@ -65,23 +88,116 @@ pub const Cms = struct {
   /// other transforms have been destroyed.
   pub const Interface = extern struct {
     /// CMS-specific data that will be passed to @ref set_fields_from_icc.
-    set_fields_data: ?*anyopaque,
+    _set_fields_data: ?*anyopaque,
     /// Populates a @ref JxlColorEncoding from an ICC profile.
-    set_fields_from_icc: SetFieldsFromIccFn,
+    _set_fields_from_icc_fn: ?SetFieldsFromIccFn,
 
     /// CMS-specific data that will be passed to @ref init.
-    init_data: ?*anyopaque,
+    _init_data: ?*anyopaque,
     /// Prepares a colorspace transform as described in the documentation of @ref
     /// jpegxl_cms_init_func.
-    init: InitFn,
+    _init_fn: InitFn,
     /// Returns a buffer that can be used as input to @c run.
-    get_src_buf: GetBufferFn,
+    _get_src_buf_fn: GetBufferFn,
     /// Returns a buffer that can be used as output from @c run.
-    get_dst_buf: GetBufferFn,
+    _get_dst_buf_fn: GetBufferFn,
     /// Executes the transform on a batch of pixels, per @ref jpegxl_cms_run_func.
-    run: RunFn,
+    _run_fn: RunFn,
     /// Cleans up the transform.
-    destroy: DestroyFn,
+    _destroy_fn: DestroyFn,
+
+    /// Creates a CMS Interface from a Zig struct.
+    ///
+    /// @param Instance: The type returned by `init` representing a specific transform session.
+    /// @param cms_ctx: Must implement `fn init(self, ...)` to create an Instance.
+    /// @param icc_ctx: May implement `fn setFieldsFromIcc(self, ...)` (Optional).
+    /// 
+    /// The context struct `Sub` must implement:
+    /// - `fn init(self: *Sub, num_threads: usize, pixels_per_thread: usize, input: *const ColorProfile, output: *const ColorProfile, intensity: f32) !?*Instance`
+    /// 
+    /// The `Instance` type returned by `init` must implement:
+    /// - `fn run(instance: *Instance, thread_id: usize, input: [*]const f32, output: [*]f32, num_pixels: usize) bool`
+    /// - `fn getSrcBuf(instance: *Instance, thread_id: usize) ?[*]f32`
+    /// - `fn getDstBuf(instance: *Instance, thread_id: usize) ?[*]f32`
+    /// - optional `fn destroy(instance: *Instance) void`
+    /// 
+    /// Additionally, `Sub` may implement:
+    /// - optional `fn setFieldsFromIcc(self: *Sub, icc: []const u8, encoding: *ColorEncoding, is_cmyk: *bool) bool`
+    /// Creates a CMS Interface from two Zig contexts.
+    /// 
+    ///
+    /// Creates a CMS Interface from Zig contexts.
+    /// 
+    /// The `cms_ctx` must implement:
+    /// - `fn init(self: *Sub, num_threads: usize, pixels_per_thread: usize, in: *const ColorProfile, out: *const ColorProfile, intensity: f32) !*Instance`
+    ///   Prepares a transformation session. Returns a pointer to a worker instance.
+    /// 
+    /// The `Instance` type returned by `init` must implement:
+    /// - `fn run(self: *Instance, thread_id: usize, input: [*]const f32, output: [*]f32, num_pixels: usize) bool`
+    ///   Executes the color transform for a batch of pixels.
+    /// - `fn getSrcBuf(self: *Instance, thread_id: usize) ?[*]f32`
+    ///   Returns a thread-local buffer for input data.
+    /// - `fn getDstBuf(self: *Instance, thread_id: usize) ?[*]f32`
+    ///   Returns a thread-local buffer for output data.
+    /// - `fn destroy(self: *Instance) void`
+    ///   Cleans up the instance context when the transform is no longer needed.
+    /// 
+    /// The `icc_ctx` (IccSub) may implement:
+    /// - `fn setFieldsFromIcc(self: *IccSub, icc: []const u8, encoding: *ColorEncoding, is_cmyk: *bool) bool`
+    ///   Parses raw ICC profile data to populate structured color encoding fields.
+    pub fn fromContext(cms_ctx: anytype, icc_ctx: anytype) @This() {
+      const CmsT = @TypeOf(cms_ctx);
+      const IccT = @TypeOf(icc_ctx);
+      const CmsSub = if (@typeInfo(CmsT) == .pointer) @typeInfo(CmsT).pointer.child else CmsT;
+      const IccSub = if (@typeInfo(IccT) == .pointer) @typeInfo(IccT).pointer.child else IccT;
+
+      const InstanceT = @typeInfo(@FieldType(CmsT, "init")).@"fn".return_type.?;
+      const InstanceP = if (@typeInfo(InstanceT) == .error_union) @typeInfo(InstanceT).error_union.payload else InstanceT;
+
+      const VTable = struct {
+        fn getCms(p: ?*anyopaque) *CmsSub { return @alignCast(@ptrCast(p.?)); }
+        fn getIcc(p: ?*anyopaque) *IccSub { return @alignCast(@ptrCast(p.?)); }
+        fn getInstance(p: ?*anyopaque) InstanceP { return @alignCast(@ptrCast(p.?)); }
+
+        fn setFields(p: ?*anyopaque, icc_ptr: ?[*]const u8, icc_size: usize, c_enc: ?*ColorEncoding, cmyk: ?*c.JXL_BOOL) callconv(.c) c.JXL_BOOL {
+          var is_cmyk: bool = false;
+          const ok = getIcc(p).setFieldsFromIcc(icc_ptr.?[0..icc_size], c_enc.?, &is_cmyk);
+          if (cmyk) |out| out.* = if (is_cmyk) c.JXL_TRUE else c.JXL_FALSE;
+          return if (ok) c.JXL_TRUE else c.JXL_FALSE;
+        }
+
+        fn init(p: ?*anyopaque, num_threads: usize, pixels_per_thread: usize, in: ?*const ColorProfile, out: ?*const ColorProfile, intensity: f32) callconv(.c) ?*anyopaque {
+          return @ptrCast(getCms(p).init(num_threads, pixels_per_thread, in.?, out.?, intensity) catch null);
+        }
+
+        fn getSrcBuf(p: ?*anyopaque, thread: usize) callconv(.c) ?[*]f32 {
+          return getInstance(p).getSrcBuf(thread);
+        }
+
+        fn getDstBuf(p: ?*anyopaque, thread: usize) callconv(.c) ?[*]f32 {
+          return getInstance(p).getDstBuf(thread);
+        }
+
+        fn run(p: ?*anyopaque, thread: usize, in: ?[*]const f32, out: ?[*]f32, num_pix: usize) callconv(.c) c.JXL_BOOL {
+          return if (getInstance(p).run(thread, in.?, out.?, num_pix)) c.JXL_TRUE else c.JXL_FALSE;
+        }
+
+        fn destroy(p: ?*anyopaque) callconv(.c) void {
+          getInstance(p).destroy();
+        }
+      };
+
+      return .{
+        ._set_fields_data = if (@bitSizeOf(IccSub) == 0) null else @ptrCast(icc_ctx),
+        ._set_fields_from_icc_fn = if (@hasDecl(IccSub, "setFieldsFromIcc")) &VTable.setFields else null,
+        ._init_data = if (@bitSizeOf(CmsSub) == 0) null else @ptrCast(cms_ctx),
+        ._init_fn = &VTable.init,
+        ._get_src_buf_fn = &VTable.getSrcBuf,
+        ._get_dst_buf_fn = &VTable.getDstBuf,
+        ._run_fn = &VTable.run,
+        ._destroy_fn = &VTable.destroy,
+      };
+    }
 
     test {
       std.debug.assert(@sizeOf(@This()) == @sizeOf(c.JxlCmsInterface));
@@ -92,7 +208,13 @@ pub const Cms = struct {
     }
 
     /// CMS interface function to parse an ICC profile and populate @p c and @p cmyk with the data.
-    pub const SetFieldsFromIccFn = *const fn (user_data: ?*anyopaque, icc_data: ?[*]const u8, icc_size: usize, c: ?*ColorEncoding, cmyk: ?*c.JXL_BOOL) callconv(.c) c.JXL_BOOL;
+    pub const SetFieldsFromIccFn = *const fn (
+      user_data: ?*anyopaque,
+      icc_data: ?[*]const u8,
+      icc_size: usize,
+      color_encoding: ?*ColorEncoding,
+      cmyk: ?*c.JXL_BOOL
+    ) callconv(.c) c.JXL_BOOL;
 
     /// CMS interface function to allocate and return the data needed for parallel transforms.
     pub const InitFn = *const fn (
@@ -120,8 +242,55 @@ pub const Cms = struct {
     pub const DestroyFn = *const fn (user_data: ?*anyopaque) callconv(.c) void;
 
     /// Returns the default CMS interface provided by libjxl.
-    pub fn getDefault() ?*const @This() {
-      return @ptrCast(c.JxlGetDefaultCms());
+    pub fn getDefault() *const @This() {
+      return @ptrCast(c.JxlGetDefaultCms().?);
+    }
+
+    /// Forwarding wrapper for _set_fields_from_icc_fn.
+    pub fn setFieldsFromIcc(self: *const @This(), icc: []const u8, encoding: *ColorEncoding, is_cmyk: *bool) bool {
+      if (self._set_fields_from_icc_fn) |f| {
+        var c_cmyk: c.JXL_BOOL = c.JXL_FALSE;
+        const res = f(self._set_fields_data, icc.ptr, icc.len, encoding, &c_cmyk);
+        is_cmyk.* = c_cmyk == c.JXL_TRUE;
+        return res == c.JXL_TRUE;
+      }
+      return false;
+    }
+
+    pub const Instance = struct {
+      _interface: *const Interface,
+      _user_data: *opaque{},
+
+      pub fn getSrcBuf(self: @This(), thread_id: usize) error{Failed}![*]f32 {
+        return self._interface._get_src_buf_fn(@ptrCast(self._user_data), thread_id) orelse error.Failed;
+      }
+
+      pub fn getDstBuf(self: @This(), thread_id: usize) error{Failed}![*]f32 {
+        return self._interface._get_dst_buf_fn(@ptrCast(self._user_data), thread_id) orelse error.Failed;
+      }
+
+      pub fn run(self: @This(), thread_id: usize, input: [*]const f32, output: [*]f32, num_pixels: usize) error{Failed}!void {
+        if (self._interface._run_fn(@ptrCast(self._user_data), thread_id, input, output, num_pixels) != c.JXL_TRUE) return error.Failed;
+      }
+
+      pub fn deinit(self: @This()) void {
+        self._interface._destroy_fn(@ptrCast(self._user_data));
+      }
+    };
+
+    /// Prepares a colorspace transform.
+    pub fn init(
+      self: *const @This(),
+      num_threads: usize,
+      pixels_per_thread: usize,
+      input: *const ColorProfile,
+      output: *const ColorProfile,
+      intensity: f32,
+    ) error{Failed}!Instance {
+      return .{
+        ._interface = self,
+        ._user_data = @ptrCast(self._init_fn(self._init_data, num_threads, pixels_per_thread, input, output, intensity) orelse return error.Failed),
+      };
     }
   };
 };
@@ -161,22 +330,6 @@ pub const Codestream = struct {
     reserved7 = @bitCast(c.JXL_CHANNEL_RESERVED7),
     unknown = @bitCast(c.JXL_CHANNEL_UNKNOWN),
     optional = @bitCast(c.JXL_CHANNEL_OPTIONAL),
-  };
-
-  /// The codestream preview header
-  pub const PreviewHeader = extern struct {
-    /// Preview width in pixels
-    xsize: u32,
-    /// Preview height in pixels
-    ysize: u32,
-
-    test {
-      std.debug.assert(@sizeOf(@This()) == @sizeOf(c.JxlPreviewHeader));
-      inline for (@typeInfo(c.JxlPreviewHeader).@"struct".fields, @typeInfo(@This()).@"struct".fields) |cf, f| {
-        std.debug.assert(@sizeOf(cf.type) == @sizeOf(f.type));
-        std.debug.assert(@bitOffsetOf(cf.type, cf.name) == @bitOffsetOf(f.type, f.name));
-      }
-    }
   };
 
   /// The codestream animation header, optionally present in the beginning of
@@ -263,9 +416,29 @@ pub const Codestream = struct {
       }
     }
 
-    pub fn initDefault(info: *Codestream.BasicInfo) void {
-      c.JxlEncoderInitBasicInfo(@ptrCast(info));
+    pub fn default() @This() { return _default_value; }
+    var _default_value: @This() = undefined;
+    pub fn _default() @This() {
+      var self: @This() = undefined;
+      c.JxlEncoderInitBasicInfo(@ptrCast(&self));
+      return self;
     }
+
+    /// The codestream preview header
+    pub const PreviewHeader = extern struct {
+      /// Preview width in pixels
+      xsize: u32,
+      /// Preview height in pixels
+      ysize: u32,
+
+      test {
+        std.debug.assert(@sizeOf(@This()) == @sizeOf(c.JxlPreviewHeader));
+        inline for (@typeInfo(c.JxlPreviewHeader).@"struct".fields, @typeInfo(@This()).@"struct".fields) |cf, f| {
+          std.debug.assert(@sizeOf(cf.type) == @sizeOf(f.type));
+          std.debug.assert(@bitOffsetOf(cf.type, cf.name) == @bitOffsetOf(f.type, f.name));
+        }
+      }
+    };
   };
 
   /// Information for a single extra channel.
@@ -295,12 +468,46 @@ pub const Codestream = struct {
       }
     }
 
-    pub fn initDefault(info: *Codestream.ExtraChannelInfo, channel_type: Codestream.ExtraChannelType) void {
-      c.JxlEncoderInitExtraChannelInfo(@intFromEnum(channel_type), @ptrCast(info));
+    pub fn default(comptime channel_type: Codestream.ExtraChannelType) @This() {
+      return @field(_default_values, @tagName(channel_type));
+    }
+
+    const _DefaultValues = @Type(.{
+      .@"struct" = .{
+        .layout = .auto,
+        .backing_integer = null,
+        .fields = blk: {
+          const filtered_fields: []const std.builtin.Type.EnumField = &.{};
+          for (@typeInfo(Codestream.ExtraChannelType).@"enum".fields) |f| {
+            if (std.mem.startsWith(u8, f.name, "reserved")) continue;
+            filtered_fields = filtered_fields ++ &[_]std.builtin.Type.EnumField{f};
+          }
+          var fields: [filtered_fields.len]std.builtin.Type.StructField = undefined;
+          for (filtered_fields, 0..) |f, i| {
+            fields[i] = .{
+              .name = f.name,
+              .type = @This(),
+              .default_value_ptr = null,
+              .is_comptime = false,
+              .alignment = 0,
+            };
+          }
+          const const_fields: [filtered_fields.len]std.builtin.Type.StructField = fields;
+          break :blk &const_fields;
+        },
+        .decls = &[_]std.builtin.Type.Declaration{},
+        .is_tuple = false,
+      },
+    });
+    const _default_values: _DefaultValues = undefined;
+    pub fn _default(channel_type: Codestream.ExtraChannelType) @This() {
+      var self: @This() = undefined;
+      c.JxlEncoderInitExtraChannelInfo(@intFromEnum(channel_type), @ptrCast(&self));
+      return self;
     }
   };
 
-  /// Extensions in the codestream header.
+  /// Extensions in the codestream header. Getting this is not yet implemented
   pub const HeaderExtensions = extern struct {
     /// Extension bits.
     extensions: u64,
@@ -344,8 +551,12 @@ pub const Frame = struct {
       }
     }
 
-    pub fn initDefault(blend_info: *Frame.BlendInfo) void {
-      c.JxlEncoderInitBlendInfo(@ptrCast(blend_info));
+    pub fn default() @This() { return _default_value; }
+    var _default_value: @This() = undefined;
+    pub fn _default() @This() {
+      var self: @This() = undefined;
+      c.JxlEncoderInitBlendInfo(@ptrCast(&self));
+      return self;
     }
   };
 
@@ -396,8 +607,12 @@ pub const Frame = struct {
       }
     }
 
-    pub fn initDefault(header: *Frame.Header) void {
-      c.JxlEncoderInitFrameHeader(@ptrCast(header));
+    pub fn default() @This() { return _default_value; }
+    var _default_value: @This() = undefined;
+    pub fn _default() @This() {
+      var self: @This() = undefined;
+      c.JxlEncoderInitFrameHeader(@ptrCast(&self));
+      return self;
     }
   };
 };
@@ -412,9 +627,9 @@ pub const Decoder = opaque {
   /// @return the decoder library version as an integer:
   /// MAJOR_VERSION * 1000000 + MINOR_VERSION * 1000 + PATCH_VERSION. For example,
   /// version 1.2.3 would return 1002003.
-  pub fn version() u32 {
-    return c.JxlDecoderVersion();
-  }
+  pub fn version() u32 { return _version_value; }
+  var _version_value: u32 = undefined;
+  pub fn _version() u32 { return c.JxlDecoderVersion(); }
 
   /// The result of @ref JxlSignatureCheck.
   pub const Signature = enum(c.JxlSignature) {
@@ -472,31 +687,23 @@ pub const Decoder = opaque {
     c.JxlDecoderDestroy(@ptrCast(dec));
   }
 
-  /// Return value for @ref JxlDecoderProcessInput.
-  /// The values from ::JXL_DEC_BASIC_INFO onwards are optional informative
-  /// events that can be subscribed to, they are never returned if they
-  /// have not been registered with @ref JxlDecoderSubscribeEvents.
-  pub const DecoderStatus = enum(c.JxlDecoderStatus) {
-    /// Function call finished successfully, or decoding is finished and there is
-    /// nothing more to be done.
+  /// Return value for @ref JxlDecoderProcessInput. The values from ::JXL_DEC_BASIC_INFO onwards are optional informative
+  /// events that can be subscribed to, they are never returned if they have not been registered with @ref JxlDecoderSubscribeEvents.
+  pub const Status = enum(c.JxlDecoderStatus) {
+    /// Function call finished successfully, or decoding is finished and there is nothing more to be done.
     success = @bitCast(c.JXL_DEC_SUCCESS),
 
     /// An error occurred, for example invalid input file or out of memory.
     @"error" = @bitCast(c.JXL_DEC_ERROR),
 
-    /// The decoder needs more input bytes to continue. Before the next @ref
-    /// JxlDecoderProcessInput call, more input data must be set, by calling @ref
-    /// JxlDecoderReleaseInput (if input was set previously) and then calling @ref
-    /// JxlDecoderSetInput.
+    /// The decoder needs more input bytes to continue. Before the next @ref Decoder.processInput call, more input data must be set, by calling
+    /// @ref Decoder.releaseInput (if input was set previously) and then calling @ref Decoder.setInput.
     need_more_input = @bitCast(c.JXL_DEC_NEED_MORE_INPUT),
 
-    /// The decoder is able to decode a preview image and requests setting a
-    /// preview output buffer using @ref JxlDecoderSetPreviewOutBuffer.
+    /// The decoder is able to decode a preview image and requests setting a preview output buffer using @ref JxlDecoderSetPreviewOutBuffer.
     need_preview_out_buffer = @bitCast(c.JXL_DEC_NEED_PREVIEW_OUT_BUFFER),
 
-    /// The decoder requests an output buffer to store the full resolution image,
-    /// which can be set with @ref JxlDecoderSetImageOutBuffer or with @ref
-    /// JxlDecoderSetImageOutCallback.
+    /// The decoder requests an output buffer to store the full resolution image, which can be set with @ref Decoder.setImageOutBuffer or with @ref Decoder.SetImageOutCallback.
     need_image_out_buffer = @bitCast(c.JXL_DEC_NEED_IMAGE_OUT_BUFFER),
 
     /// The JPEG reconstruction buffer is too small for reconstructed JPEG
@@ -504,42 +711,34 @@ pub const Decoder = opaque {
     /// make room for remaining bytes.
     jpeg_need_more_output = @bitCast(c.JXL_DEC_JPEG_NEED_MORE_OUTPUT),
 
-    /// The box contents output buffer is too small. @ref JxlDecoderSetBoxBuffer
-    /// must be called again to make room for remaining bytes.
+    /// The box contents output buffer is too small. @ref JxlDecoderSetBoxBuffer must be called again to make room for remaining bytes.
     box_need_more_output = @bitCast(c.JXL_DEC_BOX_NEED_MORE_OUTPUT),
 
-    /// Informative event: Basic information such as image dimensions and
-    /// extra channels. This event occurs max once per image.
+    /// Informative event: Basic information such as image dimensions and extra channels. This event occurs max once per image.
     basic_info = @bitCast(c.JXL_DEC_BASIC_INFO),
 
-    /// Informative event: Color encoding or ICC profile from the
-    /// codestream header.
+    /// Informative event: Color encoding or ICC profile from the codestream header.
     color_encoding = @bitCast(c.JXL_DEC_COLOR_ENCODING),
 
     /// Informative event: Preview image, a small frame, decoded.
     preview_image = @bitCast(c.JXL_DEC_PREVIEW_IMAGE),
 
-    /// Informative event: Beginning of a frame. @ref
-    /// JxlDecoderGetFrameHeader can be used at this point.
+    /// Informative event: Beginning of a frame. @ref Decoder.getFrameHeader can be used at this point.
     frame = @bitCast(c.JXL_DEC_FRAME),
 
-    /// Informative event: full frame (or layer, in case coalescing is
-    /// disabled) is decoded.
+    /// Informative event: full frame (or layer, in case coalescing is disabled) is decoded.
     full_image = @bitCast(c.JXL_DEC_FULL_IMAGE),
 
     /// Informative event: JPEG reconstruction data decoded.
     jpeg_reconstruction = @bitCast(c.JXL_DEC_JPEG_RECONSTRUCTION),
 
-    /// Informative event: The header of a box of the container format
-    /// (BMFF) is decoded.
+    /// Informative event: The header of a box of the container format (BMFF) is decoded.
     box = @bitCast(c.JXL_DEC_BOX),
 
-    /// Informative event: a progressive step in decoding the frame is
-    /// reached.
+    /// Informative event: a progressive step in decoding the frame is reached.
     frame_progression = @bitCast(c.JXL_DEC_FRAME_PROGRESSION),
 
-    /// The box being decoded is now complete. This is only emitted if a buffer
-    /// was set for the box.
+    /// The box being decoded is now complete. This is only emitted if a buffer was set for the box.
     box_complete = @bitCast(c.JXL_DEC_BOX_COMPLETE),
   };
 
@@ -586,17 +785,13 @@ pub const Decoder = opaque {
   /// Skips processing the current frame. Can be called after frame processing
   /// already started, signaled by a ::JXL_DEC_NEED_IMAGE_OUT_BUFFER event,
   /// but before the corresponding ::JXL_DEC_FULL_IMAGE event.
-  pub fn skipCurrentFrame(dec: *@This()) DecoderStatus {
+  pub fn skipCurrentFrame(dec: *@This()) Status {
     return @enumFromInt(c.JxlDecoderSkipCurrentFrame(@ptrCast(dec)));
   }
 
   /// Set the parallel runner for multithreading. May only be set before starting
   /// decoding.
-  pub fn setParallelRunner(
-    dec: *@This(),
-    parallel_runner: ParallelRunner,
-    parallel_runner_opaque: ?*anyopaque,
-  ) DecoderStatus {
+  pub fn setParallelRunner(dec: *@This(), parallel_runner: ParallelRunner.RunnerFn, parallel_runner_opaque: ?*anyopaque) Status {
     return @enumFromInt(c.JxlDecoderSetParallelRunner(@ptrCast(dec), parallel_runner, parallel_runner_opaque));
   }
 
@@ -609,46 +804,46 @@ pub const Decoder = opaque {
 
   /// Select for which informative events, i.e. ::JXL_DEC_BASIC_INFO, etc., the
   /// decoder should return with a status.
-  pub fn subscribeEvents(dec: *@This(), events_wanted: i32) DecoderStatus {
+  pub fn subscribeEvents(dec: *@This(), events_wanted: i32) Status {
     return @enumFromInt(c.JxlDecoderSubscribeEvents(@ptrCast(dec), events_wanted));
   }
 
   /// Enables or disables preserving of as-in-bitstream pixeldata
   /// orientation.
-  pub fn setKeepOrientation(dec: *@This(), skip_reorientation: Types.Bool) DecoderStatus {
+  pub fn setKeepOrientation(dec: *@This(), skip_reorientation: Types.Bool) Status {
     return @enumFromInt(c.JxlDecoderSetKeepOrientation(@ptrCast(dec), @intFromEnum(skip_reorientation)));
   }
 
   /// Enables or disables preserving of associated alpha channels. If
   /// unpremul_alpha is set to ::JXL_FALSE then for associated alpha channel,
   /// the pixel data is returned with premultiplied colors.
-  pub fn setUnpremultiplyAlpha(dec: *@This(), unpremul_alpha: Types.Bool) DecoderStatus {
+  pub fn setUnpremultiplyAlpha(dec: *@This(), unpremul_alpha: Types.Bool) Status {
     return @enumFromInt(c.JxlDecoderSetUnpremultiplyAlpha(@ptrCast(dec), @intFromEnum(unpremul_alpha)));
   }
 
   /// Enables or disables rendering spot colors. By default, spot colors
   /// are rendered, which is OK for viewing the decoded image.
-  pub fn setRenderSpotcolors(dec: *@This(), render_spotcolors: Types.Bool) DecoderStatus {
+  pub fn setRenderSpotcolors(dec: *@This(), render_spotcolors: Types.Bool) Status {
     return @enumFromInt(c.JxlDecoderSetRenderSpotcolors(@ptrCast(dec), @intFromEnum(render_spotcolors)));
   }
 
   /// Enables or disables coalescing of zero-duration frames. By default, frames
   /// are returned with coalescing enabled, i.e. all frames have the image
   /// dimensions, and are blended if needed.
-  pub fn setCoalescing(dec: *@This(), coalescing: Types.Bool) DecoderStatus {
+  pub fn setCoalescing(dec: *@This(), coalescing: Types.Bool) Status {
     return @enumFromInt(c.JxlDecoderSetCoalescing(@ptrCast(dec), @intFromEnum(coalescing)));
   }
 
   /// Decodes JPEG XL file using the available bytes. Requires input has been
   /// set with @ref JxlDecoderSetInput.
-  pub fn processInput(dec: *@This()) DecoderStatus {
+  pub fn processInput(dec: *@This()) Status {
     return @enumFromInt(c.JxlDecoderProcessInput(@ptrCast(dec)));
   }
 
   /// Sets input data for @ref JxlDecoderProcessInput. The data is owned by the
   /// caller and may be used by the decoder until @ref JxlDecoderReleaseInput is
   /// called or the decoder is destroyed or reset so must be kept alive until then.
-  pub fn setInput(dec: *@This(), data: []const u8) DecoderStatus {
+  pub fn setInput(dec: *@This(), data: []const u8) Status {
     return @enumFromInt(c.JxlDecoderSetInput(@ptrCast(dec), data.ptr, data.len));
   }
 
@@ -665,18 +860,18 @@ pub const Decoder = opaque {
 
   /// Outputs the basic image information, such as image dimensions, bit depth and
   /// all other JxlBasicInfo fields, if available.
-  pub fn getBasicInfo(dec: *const @This(), info: ?*Codestream.BasicInfo) DecoderStatus {
+  pub fn getBasicInfo(dec: *const @This(), info: ?*Codestream.BasicInfo) Status {
     return @enumFromInt(c.JxlDecoderGetBasicInfo(@ptrCast(dec), @ptrCast(info)));
   }
 
   /// Outputs information for extra channel at the given index. The index must be
   /// smaller than num_extra_channels in the associated @ref JxlBasicInfo.
-  pub fn getExtraChannelInfo(dec: *const @This(), index: usize, info: ?*Codestream.ExtraChannelInfo) DecoderStatus {
+  pub fn getExtraChannelInfo(dec: *const @This(), index: usize, info: ?*Codestream.ExtraChannelInfo) Status {
     return @enumFromInt(c.JxlDecoderGetExtraChannelInfo(@ptrCast(dec), index, @ptrCast(info)));
   }
 
   /// Outputs name for extra channel at the given index in UTF-8.
-  pub fn getExtraChannelName(dec: *const @This(), index: usize, name: []u8) DecoderStatus {
+  pub fn getExtraChannelName(dec: *const @This(), index: usize, name: []u8) Status {
     return @enumFromInt(c.JxlDecoderGetExtraChannelName(@ptrCast(dec), index, name.ptr, name.len));
   }
 
@@ -695,62 +890,40 @@ pub const Decoder = opaque {
   /// Outputs the color profile as JPEG XL encoded structured data, if available.
   /// This is an alternative to an ICC Profile, which can represent a more limited
   /// amount of color spaces, but represents them exactly through enum values.
-  pub fn getColorAsEncodedProfile(
-    dec: *const @This(),
-    target: ColorProfileTarget,
-    color_encoding: ?*ColorEncoding,
-  ) DecoderStatus {
+  pub fn getColorAsEncodedProfile(dec: *const @This(), target: ColorProfileTarget, color_encoding: ?*ColorEncoding) Status {
     return @enumFromInt(c.JxlDecoderGetColorAsEncodedProfile(@ptrCast(dec), @intFromEnum(target), @ptrCast(color_encoding)));
   }
 
   /// Outputs the size in bytes of the ICC profile returned by @ref
   /// JxlDecoderGetColorAsICCProfile, if available, or indicates there is none
   /// available.
-  pub fn getICCProfileSize(
-    dec: *const @This(),
-    target: ColorProfileTarget,
-    size: ?*usize,
-  ) DecoderStatus {
+  pub fn getICCProfileSize(dec: *const @This(), target: ColorProfileTarget, size: ?*usize) Status {
     return @enumFromInt(c.JxlDecoderGetICCProfileSize(@ptrCast(dec), @intFromEnum(target), size));
   }
 
   /// Outputs ICC profile if available. The profile is only available if @ref
   /// JxlDecoderGetICCProfileSize returns success.
-  pub fn getColorAsICCProfile(
-    dec: *const @This(),
-    target: ColorProfileTarget,
-    icc_profile: []u8,
-  ) DecoderStatus {
+  pub fn getColorAsICCProfile(dec: *const @This(), target: ColorProfileTarget, icc_profile: []u8) Status {
     return @enumFromInt(c.JxlDecoderGetColorAsICCProfile(@ptrCast(dec), @intFromEnum(target), icc_profile.ptr, icc_profile.len));
   }
 
   /// Sets the desired output color profile of the decoded image by calling
   /// @ref JxlDecoderSetOutputColorProfile, passing on @c color_encoding and
   /// setting @c icc_data to NULL.
-  pub fn setPreferredColorProfile(
-    dec: *@This(),
-    color_encoding: *const ColorEncoding,
-  ) DecoderStatus {
+  pub fn setPreferredColorProfile(dec: *@This(), color_encoding: *const ColorEncoding) Status {
     return @enumFromInt(c.JxlDecoderSetPreferredColorProfile(@ptrCast(dec), @ptrCast(color_encoding)));
   }
 
   /// Requests that the decoder perform tone mapping to the peak display luminance
   /// passed as @c desired_intensity_target, if appropriate.
-  pub fn setDesiredIntensityTarget(
-    dec: *@This(),
-    desired_intensity_target: f32,
-  ) DecoderStatus {
+  pub fn setDesiredIntensityTarget(dec: *@This(), desired_intensity_target: f32) Status {
     return @enumFromInt(c.JxlDecoderSetDesiredIntensityTarget(@ptrCast(dec), desired_intensity_target));
   }
 
   /// Sets the desired output color profile of the decoded image either from a
   /// color encoding or an ICC profile. Valid calls of this function have either @c
   /// color_encoding or @c icc_data set to NULL.
-  pub fn setOutputColorProfile(
-    dec: *@This(),
-    color_encoding: ?*const ColorEncoding,
-    icc_data: ?[]const u8,
-  ) DecoderStatus {
+  pub fn setOutputColorProfile(dec: *@This(), color_encoding: ?*const ColorEncoding, icc_data: ?[]const u8) Status {
     const icc_ptr = if (icc_data) |d| d.ptr else null;
     const icc_size = if (icc_data) |d| d.len else 0;
     return @enumFromInt(c.JxlDecoderSetOutputColorProfile(@ptrCast(dec), @ptrCast(color_encoding), icc_ptr, icc_size));
@@ -758,65 +931,43 @@ pub const Decoder = opaque {
 
   /// Sets the color management system (CMS) that will be used for color
   /// conversion (if applicable) during decoding.
-  pub fn setCms(dec: *@This(), cms: Cms.Interface) DecoderStatus {
+  pub fn setCms(dec: *@This(), cms: Cms.Interface) Status {
     return @enumFromInt(c.JxlDecoderSetCms(@ptrCast(dec), @bitCast(cms)));
   }
 
   /// Returns the minimum size in bytes of the preview image output pixel buffer
   /// for the given format.
-  pub fn previewOutBufferSize(
-    dec: *const @This(),
-    format: *const Types.PixelFormat,
-    size: *usize,
-  ) DecoderStatus {
+  pub fn previewOutBufferSize(dec: *const @This(), format: *const Types.PixelFormat, size: *usize) Status {
     return @enumFromInt(c.JxlDecoderPreviewOutBufferSize(@ptrCast(dec), @ptrCast(format), size));
   }
 
   /// Sets the buffer to write the low-resolution preview image to.
-  pub fn setPreviewOutBuffer(
-    dec: *@This(),
-    format: *const Types.PixelFormat,
-    buffer: []u8,
-  ) DecoderStatus {
+  pub fn setPreviewOutBuffer(dec: *@This(), format: *const Types.PixelFormat, buffer: []u8) Status {
     return @enumFromInt(c.JxlDecoderSetPreviewOutBuffer(@ptrCast(dec), @ptrCast(format), buffer.ptr, buffer.len));
   }
 
   /// Outputs the information from the frame, such as duration when have_animation.
-  pub fn getFrameHeader(dec: *const @This(), header: ?*Frame.Header) DecoderStatus {
+  pub fn getFrameHeader(dec: *const @This(), header: ?*Frame.Header) Status {
     return @enumFromInt(c.JxlDecoderGetFrameHeader(@ptrCast(dec), @ptrCast(header)));
   }
 
   /// Outputs name for the current frame.
-  pub fn getFrameName(dec: *const @This(), name: []u8) DecoderStatus {
+  pub fn getFrameName(dec: *const @This(), name: []u8) Status {
     return @enumFromInt(c.JxlDecoderGetFrameName(@ptrCast(dec), name.ptr, name.len));
   }
 
-  /// Outputs the blend information for the current frame for a specific extra
-  /// channel.
-  pub fn getExtraChannelBlendInfo(
-    dec: *const @This(),
-    index: usize,
-    blend_info: *Frame.BlendInfo,
-  ) DecoderStatus {
+  /// Outputs the blend information for the current frame for a specific extra channel.
+  pub fn getExtraChannelBlendInfo(dec: *const @This(), index: usize, blend_info: *Frame.BlendInfo) Status {
     return @enumFromInt(c.JxlDecoderGetExtraChannelBlendInfo(@ptrCast(dec), index, @ptrCast(blend_info)));
   }
 
-  /// Returns the minimum size in bytes of the image output pixel buffer for the
-  /// given format.
-  pub fn imageOutBufferSize(
-    dec: *const @This(),
-    format: *const Types.PixelFormat,
-    size: *usize,
-  ) DecoderStatus {
+  /// Returns the minimum size in bytes of the image output pixel buffer for the given format.
+  pub fn imageOutBufferSize(dec: *const @This(), format: *const Types.PixelFormat, size: *usize) Status {
     return @enumFromInt(c.JxlDecoderImageOutBufferSize(@ptrCast(dec), @ptrCast(format), size));
   }
 
   /// Sets the buffer to write the full resolution image to.
-  pub fn setImageOutBuffer(
-    dec: *@This(),
-    format: *const Types.PixelFormat,
-    buffer: []u8,
-  ) DecoderStatus {
+  pub fn setImageOutBuffer(dec: *@This(), format: *const Types.PixelFormat, buffer: []u8) Status {
     return @enumFromInt(c.JxlDecoderSetImageOutBuffer(@ptrCast(dec), @ptrCast(format), buffer.ptr, buffer.len));
   }
 
@@ -834,13 +985,7 @@ pub const Decoder = opaque {
   /// @param pixels pixel data as a horizontal stripe, in the format passed to @ref
   ///     JxlDecoderSetImageOutCallback. The memory is not owned by the user, and
   ///     is only valid during the time the callback is running.
-  pub const ImageOutCallback = ?*const fn (
-    @"opaque": ?*anyopaque,
-    x: usize,
-    y: usize,
-    num_pixels: usize,
-    pixels: ?*const anyopaque,
-  ) callconv(.c) void;
+  pub const ImageOutCallback = *const fn (@"opaque": ?*anyopaque, x: usize, y: usize, num_pixels: usize, pixels: ?*const anyopaque) callconv(.c) void;
 
   /// Initialization callback for @ref JxlDecoderSetMultithreadedImageOutCallback.
   ///
@@ -852,11 +997,7 @@ pub const Decoder = opaque {
   ///     one call to @c run.
   /// @return a pointer to data that will be passed to the @c run callback, or
   ///     @c NULL if initialization failed.
-  pub const ImageOutInitCallback = ?*const fn (
-    init_opaque: ?*anyopaque,
-    num_threads: usize,
-    num_pixels_per_thread: usize,
-  ) callconv(.c) ?*anyopaque;
+  pub const ImageOutInitCallback = *const fn (init_opaque: ?*anyopaque, num_threads: usize, num_pixels_per_thread: usize) callconv(.c) ?*anyopaque;
 
   /// Worker callback for @ref JxlDecoderSetMultithreadedImageOutCallback.
   ///
@@ -872,7 +1013,7 @@ pub const Decoder = opaque {
   ///     JxlDecoderSetMultithreadedImageOutCallback. The data pointed to
   ///     remains owned by the caller and is only guaranteed to outlive the current
   ///     callback invocation.
-  pub const ImageOutRunCallback = ?*const fn (
+  pub const ImageOutRunCallback = *const fn (
     run_opaque: ?*anyopaque,
     thread_id: usize,
     x: usize,
@@ -886,23 +1027,19 @@ pub const Decoder = opaque {
   /// appropriate clean-up of the @c run_opaque data returned by @c init.
   ///
   /// @param run_opaque user data returned by the @c init callback.
-  pub const ImageOutDestroyCallback = ?*const fn (
-    run_opaque: ?*anyopaque,
-  ) callconv(.c) void;
+  pub const ImageOutDestroyCallback = *const fn (run_opaque: ?*anyopaque) callconv(.c) void;
 
-  /// Sets pixel output callback. This is an alternative to @ref
-  /// JxlDecoderSetImageOutBuffer.
+  /// Sets pixel output callback. This is an alternative to @ref Decoder.setImageOutBuffer.
   pub fn setImageOutCallback(
     dec: *@This(),
     format: *const Types.PixelFormat,
     callback: ImageOutCallback,
     opaque_ptr: ?*anyopaque,
-  ) DecoderStatus {
+  ) Status {
     return @enumFromInt(c.JxlDecoderSetImageOutCallback(@ptrCast(dec), @ptrCast(format), callback, opaque_ptr));
   }
 
-  /// Similar to @ref JxlDecoderSetImageOutCallback except that the callback is
-  /// allowed an initialization phase.
+  /// Similar to @ref JxlDecoderSetImageOutCallback except that the callback is allowed an initialization phase.
   pub fn setMultithreadedImageOutCallback(
     dec: *@This(),
     format: *const Types.PixelFormat,
@@ -910,7 +1047,7 @@ pub const Decoder = opaque {
     run_callback: ImageOutRunCallback,
     destroy_callback: ImageOutDestroyCallback,
     init_opaque: ?*anyopaque,
-  ) DecoderStatus {
+  ) Status {
     return @enumFromInt(c.JxlDecoderSetMultithreadedImageOutCallback(
       @ptrCast(dec),
       @ptrCast(format),
@@ -921,14 +1058,13 @@ pub const Decoder = opaque {
     ));
   }
 
-  /// Returns the minimum size in bytes of an extra channel pixel buffer for the
-  /// given format.
+  /// Returns the minimum size in bytes of an extra channel pixel buffer for the given format.
   pub fn extraChannelBufferSize(
     dec: *const @This(),
     format: *const Types.PixelFormat,
     size: *usize,
     index: u32,
-  ) DecoderStatus {
+  ) Status {
     return @enumFromInt(c.JxlDecoderExtraChannelBufferSize(@ptrCast(dec), @ptrCast(format), size, index));
   }
 
@@ -938,12 +1074,12 @@ pub const Decoder = opaque {
     format: *const Types.PixelFormat,
     buffer: []u8,
     index: u32,
-  ) DecoderStatus {
+  ) Status {
     return @enumFromInt(c.JxlDecoderSetExtraChannelBuffer(@ptrCast(dec), @ptrCast(format), buffer.ptr, buffer.len, index));
   }
 
   /// Sets output buffer for reconstructed JPEG codestream.
-  pub fn setJPEGBuffer(dec: *@This(), data: []u8) DecoderStatus {
+  pub fn setJPEGBuffer(dec: *@This(), data: []u8) Status {
     return @enumFromInt(c.JxlDecoderSetJPEGBuffer(@ptrCast(dec), data.ptr, data.len));
   }
 
@@ -953,7 +1089,7 @@ pub const Decoder = opaque {
   }
 
   /// Sets output buffer for box output codestream.
-  pub fn setBoxBuffer(dec: *@This(), data: []u8) DecoderStatus {
+  pub fn setBoxBuffer(dec: *@This(), data: []u8) Status {
     return @enumFromInt(c.JxlDecoderSetBoxBuffer(@ptrCast(dec), data.ptr, data.len));
   }
 
@@ -963,48 +1099,45 @@ pub const Decoder = opaque {
   }
 
   /// Configures whether to get boxes in raw mode or in decompressed mode.
-  pub fn setDecompressBoxes(dec: *@This(), decompress: Types.Bool) DecoderStatus {
+  pub fn setDecompressBoxes(dec: *@This(), decompress: Types.Bool) Status {
     return @enumFromInt(c.JxlDecoderSetDecompressBoxes(@ptrCast(dec), @intFromEnum(decompress)));
   }
 
   /// Outputs the type of the current box, after a ::JXL_DEC_BOX event occurred.
   /// @param decompressed: JXL_FALSE to get the raw box type ("brob"), JXL_TRUE to get underlying type.
-  pub fn getBoxType(dec: *@This(), out_type: *Types.BoxType, decompressed: Types.Bool) DecoderStatus {
+  pub fn getBoxType(dec: *@This(), out_type: *Types.BoxType, decompressed: Types.Bool) Status {
     return @enumFromInt(c.JxlDecoderGetBoxType(@ptrCast(dec), out_type, @intFromEnum(decompressed)));
   }
 
   /// Returns the size of a box as it appears in the container file, after the @ref
   /// JXL_DEC_BOX event. This includes all the box headers.
-  pub fn getBoxSizeRaw(dec: *const @This(), size: *u64) DecoderStatus {
+  pub fn getBoxSizeRaw(dec: *const @This(), size: *u64) Status {
     return @enumFromInt(c.JxlDecoderGetBoxSizeRaw(@ptrCast(dec), size));
   }
 
   /// Returns the size of the contents of a box, after the @ref
   /// JXL_DEC_BOX event. This does not include any of the headers of the box.
-  pub fn getBoxSizeContents(dec: *const @This(), size: *u64) DecoderStatus {
+  pub fn getBoxSizeContents(dec: *const @This(), size: *u64) Status {
     return @enumFromInt(c.JxlDecoderGetBoxSizeContents(@ptrCast(dec), size));
   }
 
-  /// Configures at which progressive steps in frame decoding these @ref
-  /// JXL_DEC_FRAME_PROGRESSION event occurs.
-  pub fn setProgressiveDetail(dec: *@This(), detail: ProgressiveDetail) DecoderStatus {
+  /// Configures at which progressive steps in frame decoding these @ref JXL_DEC_FRAME_PROGRESSION event occurs.
+  pub fn setProgressiveDetail(dec: *@This(), detail: ProgressiveDetail) Status {
     return @enumFromInt(c.JxlDecoderSetProgressiveDetail(@ptrCast(dec), @intFromEnum(detail)));
   }
 
-  /// Returns the intended downsampling ratio for the progressive frame produced
-  /// by @ref JxlDecoderFlushImage.
+  /// Returns the intended downsampling ratio for the progressive frame produced by @ref JxlDecoderFlushImage.
   pub fn getIntendedDownsamplingRatio(dec: *@This()) usize {
     return c.JxlDecoderGetIntendedDownsamplingRatio(@ptrCast(dec));
   }
 
-  /// Outputs progressive step towards the decoded image so far when only partial
-  /// input was received.
-  pub fn flushImage(dec: *@This()) DecoderStatus {
+  /// Outputs progressive step towards the decoded image so far when only partial input was received.
+  pub fn flushImage(dec: *@This()) Status {
     return @enumFromInt(c.JxlDecoderFlushImage(@ptrCast(dec)));
   }
 
   /// Sets the bit depth of the output buffer or callback.
-  pub fn setImageOutBitDepth(dec: *@This(), bit_depth: *const Types.BitDepth) DecoderStatus {
+  pub fn setImageOutBitDepth(dec: *@This(), bit_depth: *const Types.BitDepth) Status {
     return @enumFromInt(c.JxlDecoderSetImageOutBitDepth(@ptrCast(dec), @ptrCast(bit_depth)));
   }
 };
@@ -1019,9 +1152,9 @@ pub const Encoder = opaque {
   /// @return the encoder library version as an integer:
   /// MAJOR_VERSION * 1000000 + MINOR_VERSION * 1000 + PATCH_VERSION. For example,
   /// version 1.2.3 would return 1002003.
-  pub fn version() u32 {
-    return c.JxlEncoderVersion();
-  }
+  pub fn version() u32 { return _version_value; }
+  var _version_value: u32 = undefined;
+  pub fn _version() u32 { return c.JxlEncoderVersion(); }
 
   /// Return value for multiple encoder functions.
   pub const Status = enum(c.JxlEncoderStatus) {
@@ -1174,7 +1307,7 @@ pub const Encoder = opaque {
   /// encoding.
   pub fn setParallelRunner(
     self: *@This(),
-    parallel_runner: ParallelRunner.ParallelRunner,
+    parallel_runner: ParallelRunner.RunnerFn,
     parallel_runner_opaque: ?*anyopaque,
   ) Status {
     return @enumFromInt(c.JxlEncoderSetParallelRunner(@ptrCast(self), parallel_runner, parallel_runner_opaque));
@@ -1193,12 +1326,12 @@ pub const Encoder = opaque {
   }
 
   /// Function type for @ref JxlEncoderSetDebugImageCallback.
-  pub const DebugImageCallback = ?*const fn (
+  pub const DebugImageCallback = *const fn (
     @"opaque": ?*anyopaque,
     label: [*c]const u8,
     xsize: usize,
     ysize: usize,
-    color: ?*const ColorEncoding,
+    color: [*c]const c.JxlColorEncoding,
     pixels: [*c]const u16,
   ) callconv(.c) void;
 
@@ -1845,7 +1978,7 @@ pub const ParallelRunner = opaque {
       return switch (self) {
         .success => {},
         .@"error" => error.ParallelExecutionError,
-        else => error.InvalidParallelRetCode
+        else => error.UnknownParallelRunnerRetCode
       };
     }
 
@@ -1874,14 +2007,14 @@ pub const ParallelRunner = opaque {
   /// @return JXL_PARALLEL_RET_RUNNER_ERROR if an error occurred in the runner
   /// code, for example, setting up the threads.
   /// @return the return value of @p init() if non-zero.
-  pub const ParallelRunner = ?*const fn (
+  pub const RunnerFn = *const fn (
     runner_opaque: ?*anyopaque,
     jpegxl_opaque: ?*anyopaque,
-    init: RunContext.InitFn,
-    func: RunContext.RunFn,
+    init: ?RunContext.InitFn,
+    func: ?RunContext.RunFn,
     start_range: u32,
     end_range: u32,
-  ) callconv(.c) RetCode;
+  ) callconv(.c) c.JxlParallelRetCode;
 
   pub const RunContext = struct {
     ctx: ?*anyopaque,
@@ -1903,7 +2036,7 @@ pub const ParallelRunner = opaque {
     /// @return 0 if the initialization process was successful.
     /// @return an error code if there was an error, which should be returned by
     /// @ref JxlParallelRunner().
-    pub const InitFn = *const fn (jpegxl_opaque: ?*anyopaque, num_threads: usize) callconv(.c) RetCode;
+    pub const InitFn = *const fn (jpegxl_opaque: ?*anyopaque, num_threads: usize) callconv(.c) c.JxlParallelRetCode;
 
     /// Parallel run data processing callback. See @ref JxlParallelRunner for
     /// details.
@@ -1970,7 +2103,7 @@ pub const ParallelRunner = opaque {
     }
 
     /// Parallel runner internally using std::thread. Use as @ref JxlParallelRunner.
-    pub fn run(self: *@This(), ctx: RunContext, range: RunRange) RetCode {
+    pub fn run(self: *@This(), ctx: RunContext, range: RunRange) !void {
       return RetCode.checkInt(c.JxlResizableParallelRunner(@ptrCast(self), ctx.ctx, ctx.init_fn, ctx.run_fn, range.from, range.to));
     }
 
@@ -2086,6 +2219,37 @@ pub const Types = struct {
     false = c.JXL_FALSE,
   };
 
+  pub const BoxType = enum(u32) {
+    // Basic Container Boxes
+    jxl_signature = std.mem.readInt(u32, "JXL ", .big),
+    ftyp          = std.mem.readInt(u32, "ftyp", .big),
+    level         = std.mem.readInt(u32, "jxll", .big),
+    
+    // Codestream Boxes
+    codestream         = std.mem.readInt(u32, "jxlc", .big),
+    partial_codestream = std.mem.readInt(u32, "jxlp", .big),
+    index              = std.mem.readInt(u32, "jxli", .big),
+    
+    // Metadata Boxes
+    exif = std.mem.readInt(u32, "Exif", .big),
+    xml  = std.mem.readInt(u32, "xml ", .big),
+    jumb = std.mem.readInt(u32, "jumb", .big),
+    brob = std.mem.readInt(u32, "brob", .big),
+    
+    // Feature Specific
+    jpeg_reconstruction = std.mem.readInt(u32, "jbrd", .big),
+
+    /// Returns the enum if the value is a known box type
+    pub fn fromInt(val: u32) !BoxType {
+      return std.meta.intToEnum(BoxType, val);
+    }
+
+    /// Helper to convert a 4-byte array directly to the enum
+    pub fn fromBytes(bytes: [4]u8) !BoxType {
+      return fromInt(std.mem.readInt(u32, &bytes, .big));
+    }
+  };
+
   /// Data type for the sample values per channel per pixel for the output buffer
   /// for pixels. This is not necessarily the same as the data type encoded in the
   /// codestream. The channels are interleaved per pixel. The pixels are
@@ -2195,14 +2359,11 @@ pub const Types = struct {
       custom = @bitCast(c.JXL_BIT_DEPTH_CUSTOM),
     };
   };
-
-  /// Data type holding the 4-character type name of an ISOBMFF box.
-  pub const BoxType = [4]u8;
 };
 
 pub const version = struct {
   pub const major: u8 = @intCast(c.JPEGXL_MAJOR_VERSION);
   pub const minor: u8 = @intCast(c.JPEGXL_MINOR_VERSION);
   pub const patch: u8 = @intCast(c.JPEGXL_PATCH_VERSION);
-  pub const numeric: c_int = c.JPEGXL_COMPUTE_NUMERIC_VERSION(major, minor, patch);
+  pub const numeric: c_int = c.JPEGXL_COMPUTE_NUMERIC_VERSION(@as(c_uint, major), @as(c_uint, minor), @as(c_uint, patch));
 };
