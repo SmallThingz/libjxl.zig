@@ -1,0 +1,35 @@
+.{
+  .name = .jxl,
+  .version = "0.0.0",
+  .fingerprint = 0x19e349696409e8bb,
+  .minimum_zig_version = "0.15.0",
+  .dependencies = .{
+    .libjxl = .{
+      .url = "https://github.com/libjxl/libjxl/archive/refs/tags/v0.11.1.tar.gz",
+      .hash = "N-V-__8AAO_HbgBGkewsrsmQxPPUEzKNRtvZGlyafTky-zOf",
+    },
+    .skcms = .{
+      .url = "https://github.com/google/skcms/archive/42030a771244ba67f86b1c1c76a6493f873c5f91.tar.gz",
+      .hash = "1220425e65141dd2fbf5a1ec45876eb46c472f051c22ec44b98d30c43dbe2eb31957",
+    },
+    .lcms2 = .{
+      .url = "https://github.com/mm2/Little-CMS/archive/65c63bf549d78253c14b30b3d62cb668bbbe612c.tar.gz",
+      .hash = "N-V-__8AABpG-gDx3olvVwfvScKf8tSwZuH-FT9WaPHi4NIk",
+    },
+    .highway = .{
+      .url = "https://github.com/google/highway/archive/457c891775a7397bdb0376bb1031e6e027af1c48.tar.gz",
+      .hash = "12206a36f1087e1ff62bf0c4bf922f9f51203acadb85eb4b429bd2b8eb5c1f4df99c",
+    },
+    .brotli = .{
+      .url = "https://github.com/google/brotli/archive/36533a866ed1ca4b75cf049f4521e4ec5fe24727.tar.gz",
+      .hash = "N-V-__8AAGLWIQAJB9dTQUQdQQD36bhBX5FpvFaoTYITY611",
+    },
+  },
+  .paths = .{
+    "build.zig",
+    "build.zig.zon",
+    "src",
+    "LICENSE",
+    "README.md",
+  },
+}

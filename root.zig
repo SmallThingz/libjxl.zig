@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const config = @import("config");
 
 const c = @cImport({
   @cInclude("jxl/cms.h");
@@ -477,7 +478,7 @@ pub const Codestream = struct {
         .layout = .auto,
         .backing_integer = null,
         .fields = blk: {
-          const filtered_fields: []const std.builtin.Type.EnumField = &.{};
+          var filtered_fields: []const std.builtin.Type.EnumField = &.{};
           for (@typeInfo(Codestream.ExtraChannelType).@"enum".fields) |f| {
             if (std.mem.startsWith(u8, f.name, "reserved")) continue;
             filtered_fields = filtered_fields ++ &[_]std.builtin.Type.EnumField{f};
@@ -489,7 +490,7 @@ pub const Codestream = struct {
               .type = @This(),
               .default_value_ptr = null,
               .is_comptime = false,
-              .alignment = 0,
+              .alignment = @alignOf(@This()),
             };
           }
           const const_fields: [filtered_fields.len]std.builtin.Type.StructField = fields;
@@ -499,7 +500,7 @@ pub const Codestream = struct {
         .is_tuple = false,
       },
     });
-    const _default_values: _DefaultValues = undefined;
+    var _default_values: _DefaultValues = undefined;
     pub fn _default(channel_type: Codestream.ExtraChannelType) @This() {
       var self: @This() = undefined;
       c.JxlEncoderInitExtraChannelInfo(@intFromEnum(channel_type), @ptrCast(&self));
@@ -1106,7 +1107,7 @@ pub const Decoder = opaque {
   /// Outputs the type of the current box, after a ::JXL_DEC_BOX event occurred.
   /// @param decompressed: JXL_FALSE to get the raw box type ("brob"), JXL_TRUE to get underlying type.
   pub fn getBoxType(dec: *@This(), out_type: *Types.BoxType, decompressed: Types.Bool) Status {
-    return @enumFromInt(c.JxlDecoderGetBoxType(@ptrCast(dec), out_type, @intFromEnum(decompressed)));
+    return @enumFromInt(c.JxlDecoderGetBoxType(@ptrCast(dec), @as(*[4]u8, @ptrCast(out_type)), @intFromEnum(decompressed)));
   }
 
   /// Returns the size of a box as it appears in the container file, after the @ref
@@ -1775,7 +1776,7 @@ pub const ColorEncoding = extern struct {
   }
 };
 
-pub const ICC = struct {
+pub const ICC = if (config.extras) struct {
   /// Allocates a buffer using the memory manager, fills it with a compressed
   /// representation of an ICC profile, returns the result through @c output_buffer
   /// and indicates its size through @c output_size.
@@ -1805,7 +1806,7 @@ pub const ICC = struct {
     if (c.JxlICCProfileDecode(@ptrCast(memory_manager), compressed_icc.ptr, compressed_icc.len, @ptrCast(&result.ptr), &result.len) == c.JXL_TRUE) return result;
     return error.Failed;
   }
-};
+} else void;
 
 /// Gain map bundle
 ///
@@ -1819,7 +1820,7 @@ pub const ICC = struct {
 /// is the caller's responsibility to ensure that the buffer remains valid and is
 /// not deallocated as long as these pointers are in use. The structure should be
 /// considered as providing a view into the buffer, not as an owner of the data.
-pub const GainMapBundle = extern struct {
+pub const GainMapBundle = if (config.extras) extern struct {
   /// Size of the gain map metadata in bytes.
   gain_map_metadata_size: u16,
   /// Pointer to the gain map metadata, which is a binary
@@ -1897,7 +1898,7 @@ pub const GainMapBundle = extern struct {
     if (c.JxlGainMapReadBundle(@ptrCast(self), input_buffer.ptr, input_buffer.len, &out) == c.JXL_TRUE) return out;
     return error.Failed;
   }
-};
+} else void;
 
 /// Memory Manager struct.
 /// These functions, when provided by the caller, will be used to handle memory
