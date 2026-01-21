@@ -2052,14 +2052,14 @@ pub const MemoryManager = extern struct {
   /// NULL.
   pub const FreeFn = *const fn (opaque_ptr: ?*anyopaque, address: ?*anyopaque) callconv(.c) void;
 
+  // The returned memory is may not be aligned to a specific size or initialized at all.
   pub fn _alloc(self: *const @This(), size: usize) ![]u8 {
     return @as([*]u8, @ptrCast(self._alloc_fn(self._ctx, size) orelse return error.OutOfMemory))[0 .. size];
   }
 
-  pub fn alloc(self: *const @This(), comptime T: type, count: usize) ![]T {
-    std.debug.assert(@alignOf(T) <= 16);
+  pub fn alloc(self: *const @This(), comptime T: type, count: usize) ![]align(1) T {
     const mem = try _alloc(self, @sizeOf(T) * count);
-    return @as([*]T, @ptrCast(@alignCast(mem.ptr)))[0..count];
+    return @as([*]align(1)T, @ptrCast(mem.ptr))[0..count];
   }
 
   pub fn free(self: *const @This(), ptr: ?[*]u8) void {
