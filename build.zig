@@ -14,27 +14,32 @@ pub fn build(b: *std.Build) !void {
   });
 
   const options_step = b.addOptions();
+  try initFeatures(b);
+  options_step.addOption(bool, "boxes", features.boxes);
+  options_step.addOption(bool, "threading", features.threading);
+  options_step.addOption(bool, "jpeg_transcode", features.jpeg_transcode);
+  // options_step.addOption(bool, "jpeg_lib", features.jpeg_lib);
+  options_step.addOption(bool, "3d_icc_tonemapping", features.@"3d_icc_tonemapping");
+  options_step.addOption(bool, "jpegxl_tcmalloc", features.jpegxl_tcmalloc);
+  mod.addImport("config", options_step.createModule());
+
+  const include_paths = b.option([]const []const u8, "include_paths", "the paths to include for the libjxl module")
+    orelse if (build_jxl) &.{} else &[_][]const u8{"/usr/include/"};
+  const r_paths = b.option([]const []const u8, "r_paths", "the paths to add to the rpath for the libjxl module")
+    orelse if (build_jxl) &.{} else  &[_][]const u8{"/usr/lib/"};
+
+  for (include_paths) |path| mod.addIncludePath(.{ .cwd_relative = path });
+  for (r_paths) |path| mod.addRPath(.{ .cwd_relative = path });
 
   if (build_jxl) {
-    options_step.addOption(bool, "extras", true);
-    initCompilationOptions(b, target, optimize) catch @panic("OOM");
+    try initOptions(b, target, optimize);
     mod.linkLibrary(try createJxl(b));
   } else {
-    options_step.addOption(bool, "extras", b.option(bool, "extras", "Build libjxl with extras (ICC and GainMap)") orelse false);
-    const include_paths = b.option([]const []const u8, "include_paths", "the paths to include for the libjxl module")
-      orelse if (build_jxl) &.{} else &[_][]const u8{"/usr/include/"};
-    const r_paths = b.option([]const []const u8, "r_paths", "the paths to add to the rpath for the libjxl module")
-      orelse if (build_jxl) &.{} else  &[_][]const u8{"/usr/lib/"};
-
-    for (include_paths) |path| mod.addIncludePath(.{ .cwd_relative = path });
-    for (r_paths) |path| mod.addRPath(.{ .cwd_relative = path });
-
     mod.linkSystemLibrary("jxl_cms", .{});
-    mod.linkSystemLibrary("jxl_threads", .{});
+    if (features.threading) mod.linkSystemLibrary("jxl_threads", .{});
     mod.linkSystemLibrary("jxl", .{});
   }
 
-  mod.addImport("config", options_step.createModule());
   addTestStep(b, mod, target, optimize) catch {};
 }
 
@@ -69,13 +74,33 @@ fn addTestStep(b: *std.Build, mod: *std.Build.Module, target: std.Build.Resolved
   test_step.dependOn(&run_tests.step);
 }
 
-const Options = struct {
-  pub const Cms = enum { none, skcms, lcms2 };
+const Features = struct {
+  pub const Cms = enum { skcms, lcms2 };
+  cms: Cms,
+  boxes: bool,
+  threading: bool,
+  jpeg_transcode: bool,
+  // jpeg_lib: bool,
+  @"3d_icc_tonemapping": bool,
+  jpegxl_tcmalloc: bool,
+};
 
-  features: struct {
-    cms: Cms,
-    enable_gain_map: bool,
-  },
+var features: Features = undefined;
+
+fn initFeatures(b: *std.Build) !void {
+  const threading = b.option(bool, "threading", "Enable Threading support") orelse true;
+  features = .{
+    .cms = b.option(Features.Cms, "cms", "Enable Color Management System") orelse .skcms,
+    .boxes = b.option(bool, "boxes", "Enable support for the JXL container format (ISOBMFF \"boxes\")") orelse true,
+    .threading = threading,
+    .jpeg_transcode = b.option(bool, "jpeg_transcode", "Enable JPEG transcoding support") orelse true,
+    // .jpeg_lib = b.option(bool, "jpeg_lib", "Builds the Jpegli library, a higher-performance JPEG encoder/decoder included in the JXL project") orelse true,
+    .@"3d_icc_tonemapping" = b.option(bool, "3d_icc_tonemapping", "Enable 3D ICC tonemapping support, Essential for high-quality HDR-to-SDR conversion.") orelse true,
+    .jpegxl_tcmalloc = b.option(bool, "jpegxl_tcmalloc", "Enable tcmalloc (speed up in multithreaded mode)") orelse threading,
+  };
+}
+
+const Options = struct {
   target: std.Build.ResolvedTarget,
   optimize: std.builtin.OptimizeMode,
   c_flags: []const []const u8 = &[_][]const u8{ "-std=c11" },
@@ -93,7 +118,6 @@ const Options = struct {
     avx512dq: bool,
     evex512: bool,
   },
-  single_threaded: bool,
   strip: bool,
   unwind_tables: std.builtin.UnwindTables,
   stack_protector: bool,
@@ -106,16 +130,11 @@ var options: Options = undefined;
 
 const Feature = std.Target.x86.Feature;
 
-fn initCompilationOptions(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) !void {
+fn initOptions(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) !void {
   options = .{
-    .features = .{
-      .cms = b.option(Options.Cms, "jxl_cms", "Enable Color Management System") orelse .skcms,
-      .enable_gain_map = b.option(bool, "jxl_enable_gain_map", "Enable Gain Map support") orelse true,
-    },
     .target = target,
     .optimize = optimize,
     .extensions = undefined,
-    .single_threaded = b.option(bool, "lib_single_threaded", "Enable single-threaded build. Wrapper option is handled saperately") orelse false,
     .strip = b.option(bool, "lib_strip", "Strip symbols. Wrapper option is handled saperately") orelse (optimize != .Debug),
     .unwind_tables = b.option(std.builtin.UnwindTables, "lib_unwind_tables", "Unwind tables. Wrapper option is handled saperately") orelse .none,
     .stack_protector = b.option(bool, "lib_stack_protector", "Enable stack protection. Wrapper option is handled saperately") orelse false,
@@ -147,7 +166,7 @@ pub fn createJxl(b: *std.Build) !*std.Build.Step.Compile {
     .root_module = b.createModule(.{
       .target = options.target,
       .optimize = options.optimize,
-      .single_threaded = options.single_threaded,
+      .single_threaded = !features.threading,
       .strip = options.strip,
       .unwind_tables = options.unwind_tables,
       .stack_protector = options.stack_protector,
@@ -160,27 +179,23 @@ pub fn createJxl(b: *std.Build) !*std.Build.Step.Compile {
     .linkage = .static,
   });
 
-  lib.addIncludePath(.{.cwd_relative = "/usr/include/"});
-  lib.addRPath(.{.cwd_relative = "/usr/lib/"});
-
   lib.root_module.addCMacro("JXL_INTERNAL_LIBRARY_BUILD", "1");
   if (options.extensions.avx512f) lib.root_module.addCMacro("FJXL_ENABLE_AVX512", "1");
   if (options.extensions.avx2) lib.root_module.addCMacro("FJXL_ENABLE_AVX2", "1");
   if (options.extensions.sse4_1) lib.root_module.addCMacro("FJXL_ENABLE_SSE4", "1");
-  if (options.features.enable_gain_map) lib.root_module.addCMacro("JXL_GAIN_MAP", "1");
-  switch (options.features.cms) {
-    .none => {},
-    .skcms => {
-      lib.root_module.addCMacro("JPEGXL_ENABLE_SKCMS", "1");
-      lib.root_module.addCMacro("JPEGXL_ENABLE_LCMS2", "0");
-      try skcmsLib(b, lib);
-    },
-    .lcms2 => {
-      lib.root_module.addCMacro("JPEGXL_ENABLE_LCMS2", "1");
-      lib.root_module.addCMacro("JPEGXL_ENABLE_SKCMS", "0");
-      try lcms2Lib(b, lib);
-    },
+
+  lib.root_module.addCMacro("JPEGXL_ENABLE_SKCMS", if (features.cms == .skcms) "1" else "0");
+  lib.root_module.addCMacro("JPEGXL_ENABLE_LCMS2", if (features.cms == .lcms2) "1" else "0");
+  switch (features.cms) {
+    .skcms => try skcmsLib(b, lib),
+    .lcms2 => try lcms2Lib(b, lib),
   }
+  lib.root_module.addCMacro("JPEGXL_ENABLE_BOXES", if (features.boxes) "1" else "0");
+  lib.root_module.addCMacro("JXL_THREADING", if (features.threading) "1" else "0");
+  lib.root_module.addCMacro("JPEGXL_ENABLE_TRANSCODE_JPEG", if (features.jpeg_transcode) "1" else "0");
+  // lib.root_module.addCMacro("JPEGXL_ENABLE_JPEGLI_LIBJPEG", if (features.jpeg_lib) "1" else "0");
+  lib.root_module.addCMacro("JXL_ENABLE_3D_ICC_TONEMAPPING", if (features.@"3d_icc_tonemapping") "1" else "0");
+  // lib.root_module.addCMacro("JPEGXL_ENABLE_TCMALLOC", if (features.jpegxl_tcmalloc) "1" else "0");
 
   lib.addConfigHeader(b.addConfigHeader(.{
     .style = .{ .cmake = jxl_dep.path("lib/jxl/version.h.in") },
@@ -238,6 +253,9 @@ pub fn addSourcesProcedural(
       if (std.mem.startsWith(u8, path, "tools/")) break :blk true;
       if (std.mem.startsWith(u8, path, "jpegli/")) break :blk true;
       if (std.mem.startsWith(u8, path, "extras/")) break :blk true;
+
+      // Exclude threading code if threading is disabled
+      if (features.threading and std.mem.startsWith(u8, path, "threads/")) break :blk true;
 
       // Exclude main entry points for CLI tools
       const base = std.fs.path.basename(path);

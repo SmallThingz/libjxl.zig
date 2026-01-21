@@ -44,7 +44,7 @@ pub fn init(options: InitOptions) !void {
   Decoder._version_value = Decoder._version();
 }
 
-pub const Cms = struct {
+pub const Cms = if (config.cms) struct {
   /// Represents an input or output colorspace to a color transform, as a serialized ICC profile.
   pub const ColorProfile = extern struct {
     /// The serialized ICC profile. This is guaranteed to be present and valid.
@@ -294,7 +294,7 @@ pub const Cms = struct {
       };
     }
   };
-};
+} else void;
 
 pub const Codestream = struct {
   /// Image orientation metadata.
@@ -790,9 +790,10 @@ pub const Decoder = opaque {
     return @enumFromInt(c.JxlDecoderSkipCurrentFrame(@ptrCast(dec)));
   }
 
-  /// Set the parallel runner for multithreading. May only be set before starting
-  /// decoding.
-  pub fn setParallelRunner(dec: *@This(), parallel_runner: ParallelRunner.RunnerFn, parallel_runner_opaque: ?*anyopaque) Status {
+  /// Set the parallel runner for multithreading. May only be set before starting decoding.
+  pub const setParallelRunner = if (config.threading) _setParallelRunner else null;
+
+  fn _setParallelRunner(dec: *@This(), parallel_runner: ParallelRunner.RunnerFn, parallel_runner_opaque: ?*anyopaque) Status {
     return @enumFromInt(c.JxlDecoderSetParallelRunner(@ptrCast(dec), parallel_runner, parallel_runner_opaque));
   }
 
@@ -930,9 +931,10 @@ pub const Decoder = opaque {
     return @enumFromInt(c.JxlDecoderSetOutputColorProfile(@ptrCast(dec), @ptrCast(color_encoding), icc_ptr, icc_size));
   }
 
-  /// Sets the color management system (CMS) that will be used for color
-  /// conversion (if applicable) during decoding.
-  pub fn setCms(dec: *@This(), cms: Cms.Interface) Status {
+  /// Sets the color management system (CMS) that will be used for color conversion (if applicable) during decoding.
+  pub const setCms = if (config.cms) _setCms else null;
+
+  fn _setCms(dec: *@This(), cms: Cms.Interface) Status {
     return @enumFromInt(c.JxlDecoderSetCms(@ptrCast(dec), @bitCast(cms)));
   }
 
@@ -1298,19 +1300,17 @@ pub const Encoder = opaque {
     c.JxlEncoderReset(@ptrCast(self));
   }
 
-  /// Sets the color management system (CMS) that will be used for color conversion
-  /// (if applicable) during encoding.
-  pub fn setCms(self: *@This(), cms: Cms.Interface) void {
+  /// Sets the color management system (CMS) that will be used for color conversion (if applicable) during encoding.
+  pub const setCms = if (config.cms) _setCms else null;
+
+  fn _setCms(self: *@This(), cms: Cms.Interface) void {
     c.JxlEncoderSetCms(@ptrCast(self), @bitCast(cms));
   }
 
-  /// Set the parallel runner for multithreading. May only be set before starting
-  /// encoding.
-  pub fn setParallelRunner(
-    self: *@This(),
-    parallel_runner: ParallelRunner.RunnerFn,
-    parallel_runner_opaque: ?*anyopaque,
-  ) Status {
+  /// Set the parallel runner for multithreading. May only be set before starting encoding.
+  pub const setParallelRunner = if (config.threading) _setParallelRunner else null;
+
+  fn _setParallelRunner(self: *@This(), parallel_runner: ParallelRunner.RunnerFn, parallel_runner_opaque: ?*anyopaque) Status {
     return @enumFromInt(c.JxlEncoderSetParallelRunner(@ptrCast(self), parallel_runner, parallel_runner_opaque));
   }
 
@@ -1776,7 +1776,7 @@ pub const ColorEncoding = extern struct {
   }
 };
 
-pub const ICC = if (config.extras) struct {
+pub const ICC = struct {
   /// Allocates a buffer using the memory manager, fills it with a compressed
   /// representation of an ICC profile, returns the result through @c output_buffer
   /// and indicates its size through @c output_size.
@@ -1806,7 +1806,7 @@ pub const ICC = if (config.extras) struct {
     if (c.JxlICCProfileDecode(@ptrCast(memory_manager), compressed_icc.ptr, compressed_icc.len, @ptrCast(&result.ptr), &result.len) == c.JXL_TRUE) return result;
     return error.Failed;
   }
-} else void;
+};
 
 /// Gain map bundle
 ///
@@ -1820,7 +1820,7 @@ pub const ICC = if (config.extras) struct {
 /// is the caller's responsibility to ensure that the buffer remains valid and is
 /// not deallocated as long as these pointers are in use. The structure should be
 /// considered as providing a view into the buffer, not as an owner of the data.
-pub const GainMapBundle = if (config.extras) extern struct {
+pub const GainMapBundle = extern struct {
   /// Size of the gain map metadata in bytes.
   gain_map_metadata_size: u16,
   /// Pointer to the gain map metadata, which is a binary
@@ -1898,7 +1898,7 @@ pub const GainMapBundle = if (config.extras) extern struct {
     if (c.JxlGainMapReadBundle(@ptrCast(self), input_buffer.ptr, input_buffer.len, &out) == c.JXL_TRUE) return out;
     return error.Failed;
   }
-} else void;
+};
 
 /// Memory Manager struct.
 /// These functions, when provided by the caller, will be used to handle memory
@@ -1961,7 +1961,7 @@ pub const MemoryManager = extern struct {
   }
 };
 
-pub const ParallelRunner = opaque {
+pub const ParallelRunner = if (config.threading) opaque {
   /// Return code used in the JxlParallel* functions as return value. A value
   /// of ::JXL_PARALLEL_RET_SUCCESS means success and any other value means error.
   /// The special value ::JXL_PARALLEL_RET_RUNNER_ERROR can be used by the runner
@@ -2141,7 +2141,7 @@ pub const ParallelRunner = opaque {
       return c.JxlThreadParallelRunnerDefaultNumWorkerThreads();
     }
   };
-};
+} else void;
 
 /// Opaque structure that holds the encoder statistics.
 ///
