@@ -1,11 +1,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const jxl = @import("jxl");
+// const jxl = if (@hasDecl((@import("root")), "c")) @import("root") else @import("jxl");
 
 pub fn main() !void {
   const test_fns: []const std.builtin.TestFn = builtin.test_functions;
-
-  try jxl.init(.{});
+  // try jxl.init(.{});
 
   var passed: usize = 0;
   var failed: usize = 0;

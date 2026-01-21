@@ -13,16 +13,15 @@ pub fn build(b: *std.Build) !void {
     .optimize = optimize,
   });
 
-  const options_step = b.addOptions();
-  try initFeatures(b);
-  options_step.addOption(bool, "boxes", features.boxes);
-  options_step.addOption(bool, "threading", features.threading);
-  options_step.addOption(bool, "jpeg_transcode", features.jpeg_transcode);
-  options_step.addOption(bool, "3d_icc_tonemapping", features.@"3d_icc_tonemapping");
-  options_step.addOption(bool, "jpegxl_tcmalloc", features.jpegxl_tcmalloc);
-  options_step.addOption(bool, "icc", b.option(bool, "icc", "Enable support for ICC") orelse build_jxl);
-  options_step.addOption(bool, "gain_map", b.option(bool, "gain_map", "Enable support for gain maps") orelse build_jxl);
-  mod.addImport("config", options_step.createModule());
+  const config_step = b.addOptions();
+  initFeatures(b);
+  config_step.addOption(bool, "boxes", features.boxes);
+  config_step.addOption(bool, "threading", features.threading);
+  config_step.addOption(bool, "jpeg_transcode", features.jpeg_transcode);
+  config_step.addOption(bool, "3d_icc_tonemapping", features.@"3d_icc_tonemapping");
+  config_step.addOption(bool, "icc", b.option(bool, "icc", "Enable support for ICC") orelse build_jxl);
+  config_step.addOption(bool, "gain_map", b.option(bool, "gain_map", "Enable support for gain maps") orelse build_jxl);
+  mod.addImport("config", config_step.createModule());
 
   const include_paths = b.option([]const []const u8, "include_paths", "the paths to include for the libjxl module")
     orelse if (build_jxl) &.{} else &[_][]const u8{"/usr/include/"};
@@ -41,38 +40,36 @@ pub fn build(b: *std.Build) !void {
     mod.linkSystemLibrary("jxl", .{});
   }
 
-  addTestStep(b, mod, target, optimize) catch {};
+  const test_step = b.step("test", "Run tests");
+  const test_runner_name = "test_runner.zig";
+
+  // we don't care about time-of-check time-of-use race conditions as this is a simple test runner
+  if (!exists(test_runner_name)) return; // error.MissingTestRunner;
+
+  for (&[_][]const u8{ "root.zig" }) |file| {
+    const tests = b.addTest(.{
+      .root_module = b.createModule(.{
+        .root_source_file = b.path(file),
+        .target = target,
+        .optimize = optimize,
+      }),
+      .test_runner = .{
+        .path = b.path(test_runner_name),
+        .mode = .simple,
+      }
+    });
+
+    tests.root_module.addImport("config", config_step.createModule());
+
+    tests.root_module.addImport("jxl", mod);
+    const run_tests = b.addRunArtifact(tests);
+    test_step.dependOn(&run_tests.step);
+  }
 }
 
 fn exists(path: []const u8) bool {
   std.fs.cwd().access(path, .{}) catch return false;
   return true;
-}
-
-fn addTestStep(b: *std.Build, mod: *std.Build.Module, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) !void {
-  const test_step = b.step("test", "Run tests");
-  const test_file_name = "test.zig";
-  const test_runner_name = "test_runner.zig";
-
-  // we don't care about time-of-check time-of-use race conditions as this is a simple test runner
-  if (!exists(test_file_name)) return error.MissingTestFile;
-  if (!exists(test_runner_name)) return error.MissingTestRunner;
-
-  const tests = b.addTest(.{
-    .root_module = b.createModule(.{
-      .root_source_file = b.path(test_file_name),
-      .target = target,
-      .optimize = optimize,
-    }),
-    .test_runner = .{
-      .path = b.path(test_runner_name),
-      .mode = .simple,
-    }
-  });
-
-  tests.root_module.addImport("jxl", mod);
-  const run_tests = b.addRunArtifact(tests);
-  test_step.dependOn(&run_tests.step);
 }
 
 const Features = struct {
@@ -83,12 +80,11 @@ const Features = struct {
   jpeg_transcode: bool,
   // jpeg_lib: bool,
   @"3d_icc_tonemapping": bool,
-  jpegxl_tcmalloc: bool,
 };
 
 var features: Features = undefined;
 
-fn initFeatures(b: *std.Build) !void {
+fn initFeatures(b: *std.Build) void {
   const threading = b.option(bool, "threading", "Enable Threading support") orelse true;
   features = .{
     .cms = b.option(Features.Cms, "cms", "Enable Color Management System") orelse .skcms,
@@ -97,7 +93,6 @@ fn initFeatures(b: *std.Build) !void {
     .jpeg_transcode = b.option(bool, "jpeg_transcode", "Enable JPEG transcoding support") orelse true,
     // .jpeg_lib = b.option(bool, "jpeg_lib", "Builds the Jpegli library, a higher-performance JPEG encoder/decoder included in the JXL project") orelse true,
     .@"3d_icc_tonemapping" = b.option(bool, "3d_icc_tonemapping", "Enable 3D ICC tonemapping support, Essential for high-quality HDR-to-SDR conversion.") orelse true,
-    .jpegxl_tcmalloc = b.option(bool, "jpegxl_tcmalloc", "Enable tcmalloc (speed up in multithreaded mode)") orelse threading,
   };
 }
 
@@ -258,7 +253,7 @@ pub fn addSourcesProcedural(
       if (std.mem.startsWith(u8, path, "extras/")) break :blk true;
 
       // Exclude threading code if threading is disabled
-      if (features.threading and std.mem.indexOf(u8, path, "thread") != null) break :blk true;
+      if (!features.threading and std.mem.indexOf(u8, path, "thread") != null) break :blk true;
 
       // Exclude main entry points for CLI tools
       const base = std.fs.path.basename(path);
