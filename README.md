@@ -64,7 +64,31 @@ The wrapper supports several build-time options to satisfy `libjxl` dependencies
 
 | Option | Values | Description |
 | --- | --- | --- |
-| `-Dcms` | `skcms`, `lcms2`, `none` | Choose the Color Management System. |
+| **`static_jxl`** | `bool` (default: `true`) | Build `libjxl` from source (static). If `false`, links to system libs. |
+| **`cms`** | `skcms`, `lcms2` | Choose the Color Management System. |
+| **`threading`** | `bool` (default: `true`) | Enable multi-threading support. |
+| **`boxes`** | `bool` (default: `true`) | Enable JXL container format (ISOBMFF "boxes"). |
+| **`jpeg_transcode`** | `bool` (default: `true`) | Enable lossless JPEG to JXL transcoding. |
+| **`3d_icc_tonemapping`** | `bool` (default: `true`) | Enable 3D ICC tonemapping for HDR-to-SDR conversion. |
+| **`icc`** | `bool` | Enable support for ICC profiles. |
+| **`gain_map`** | `bool` | Enable support for HDR gain maps. |
+| **`include_paths`** | `[]const []const u8` | Custom header search paths for system linking. |
+| **`r_paths`** | `[]const []const u8` | Custom runtime library search paths for system linking. |
+
+*These options specifically affect the C/C++ library compilation.*
+| Option | Values | Description |
+| --- | --- | --- |
+| **`lib_strip`** | `bool` | Strip symbols from the library binary. |
+| **`lib_unwind_tables`** | `none`, `sync`, `async` | Control stack unwind table generation. |
+| **`lib_stack_protector`** | `bool` | Enable stack smashing protection. |
+| **`lib_stack_check`** | `bool` | Enable stack limit checking. |
+| **`lib_red_zone`** | `bool` (default: `true`) | Enable the "red zone" optimization. |
+| **`lib_omit_frame_pointer`** | `bool` (default: `true`) | Omit the frame pointer for a performance boost. |
+| **`lib_error_tracing`** | `bool` | Enable internal error tracing (useful for debugging). |
+
+---
+
+**Would you like me to show you how to set up the `build.zig.zon` file so Zig can automatically download the `libjxl` and `highway` dependencies?**
 
 
 ## 🧩 Advanced: Custom CMS Interface
