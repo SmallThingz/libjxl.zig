@@ -321,16 +321,9 @@ pub const Codestream = struct {
     black = @bitCast(c.JXL_CHANNEL_BLACK),
     cfa = @bitCast(c.JXL_CHANNEL_CFA),
     thermal = @bitCast(c.JXL_CHANNEL_THERMAL),
-    reserved0 = @bitCast(c.JXL_CHANNEL_RESERVED0),
-    reserved1 = @bitCast(c.JXL_CHANNEL_RESERVED1),
-    reserved2 = @bitCast(c.JXL_CHANNEL_RESERVED2),
-    reserved3 = @bitCast(c.JXL_CHANNEL_RESERVED3),
-    reserved4 = @bitCast(c.JXL_CHANNEL_RESERVED4),
-    reserved5 = @bitCast(c.JXL_CHANNEL_RESERVED5),
-    reserved6 = @bitCast(c.JXL_CHANNEL_RESERVED6),
-    reserved7 = @bitCast(c.JXL_CHANNEL_RESERVED7),
     unknown = @bitCast(c.JXL_CHANNEL_UNKNOWN),
     optional = @bitCast(c.JXL_CHANNEL_OPTIONAL),
+    _, // future expansion
   };
 
   /// The codestream animation header, optionally present in the beginning of
@@ -480,7 +473,6 @@ pub const Codestream = struct {
         .fields = blk: {
           var filtered_fields: []const std.builtin.Type.EnumField = &.{};
           for (@typeInfo(Codestream.ExtraChannelType).@"enum".fields) |f| {
-            if (std.mem.startsWith(u8, f.name, "reserved")) continue;
             filtered_fields = filtered_fields ++ &[_]std.builtin.Type.EnumField{f};
           }
           var fields: [filtered_fields.len]std.builtin.Type.StructField = undefined;
@@ -742,6 +734,8 @@ pub const Decoder = opaque {
     /// The box being decoded is now complete. This is only emitted if a buffer was set for the box.
     box_complete = @bitCast(c.JXL_DEC_BOX_COMPLETE),
 
+    _, // future expansion
+
     pub const Set = error {
       DecoderError,
       DecoderNeedMoreInput,
@@ -758,6 +752,7 @@ pub const Decoder = opaque {
       DecoderBox,
       DecoderFrameProgression,
       DecoderBoxComplete,
+      UnknownDecoderError,
     };
 
     pub fn check(self: c_uint) !void {
@@ -778,6 +773,7 @@ pub const Decoder = opaque {
         .box => Set.DecoderBox,
         .frame_progression => Set.DecoderFrameProgression,
         .box_complete => Set.DecoderBoxComplete,
+        else => error.UnknownDecoderError
       };
     }
   };
@@ -1259,9 +1255,12 @@ pub const Encoder = opaque {
     /// The encoder needs more output buffer to continue encoding.
     need_more_output = @bitCast(c.JXL_ENC_NEED_MORE_OUTPUT),
 
+    _, // future expansion
+
     pub const Set = error {
       EncoderError,
       EncoderNeedMoreOutput,
+      UnknownEncoderError,
     };
 
     pub fn check(self: c_uint) !void {
@@ -1269,6 +1268,7 @@ pub const Encoder = opaque {
         .success => {},
         .@"error" => Set.EncoderError,
         .need_more_output => Set.EncoderNeedMoreOutput,
+        else => error.UnknownEncoderError
       };
     }
   };
@@ -1291,6 +1291,7 @@ pub const Encoder = opaque {
     not_supported = @bitCast(c.JXL_ENC_ERR_NOT_SUPPORTED),
     /// The encoder API is used in an incorrect way.
     api_usage = @bitCast(c.JXL_ENC_ERR_API_USAGE),
+    _, // future expansion
   };
 
   /// Id of encoder options for a frame.
@@ -1777,6 +1778,7 @@ pub const ColorEncoding = extern struct {
     xyb = @bitCast(c.JXL_COLOR_SPACE_XYB),
     /// None of the other table entries describe the color space appropriately
     unknown = @bitCast(c.JXL_COLOR_SPACE_UNKNOWN),
+    _, // future expansion
   };
 
   /// Built-in white points for color encoding. When decoding, the numerical xy
@@ -1796,6 +1798,7 @@ pub const ColorEncoding = extern struct {
     e = @bitCast(c.JXL_WHITE_POINT_E),
     /// DCI-P3 from SMPTE RP 431-2: 0.314, 0.351
     dci = @bitCast(c.JXL_WHITE_POINT_DCI),
+    _, // future expansion
   };
 
   /// Built-in primaries for color encoding. When decoding, the primaries can be
@@ -2446,8 +2449,7 @@ pub const Types = struct {
       /// and the decoder outputs pixels in this range.
       from_codestream = @bitCast(c.JXL_BIT_DEPTH_FROM_CODESTREAM),
 
-      /// This setting can only be used in the decoder to select a custom range for
-      /// pixel output
+      /// This setting can only be used in the decoder to select a custom range for pixel output
       custom = @bitCast(c.JXL_BIT_DEPTH_CUSTOM),
     };
   };
