@@ -4,7 +4,7 @@ const builtin = @import("builtin");
 pub fn build(b: *std.Build) !void {
   const target = b.standardTargetOptions(.{});
   const optimize = b.standardOptimizeOption(.{});
-  const build_jxl = b.option(bool, "build_jxl", "Build libjxl from source (use static linking)") orelse true;
+  const build_jxl = b.option(bool, "static_jxl", "Build libjxl from source (use static linking)") orelse true;
 
   const mod = b.addModule("jxl", .{
     .root_source_file = b.path("root.zig"),
@@ -18,9 +18,10 @@ pub fn build(b: *std.Build) !void {
   options_step.addOption(bool, "boxes", features.boxes);
   options_step.addOption(bool, "threading", features.threading);
   options_step.addOption(bool, "jpeg_transcode", features.jpeg_transcode);
-  // options_step.addOption(bool, "jpeg_lib", features.jpeg_lib);
   options_step.addOption(bool, "3d_icc_tonemapping", features.@"3d_icc_tonemapping");
   options_step.addOption(bool, "jpegxl_tcmalloc", features.jpegxl_tcmalloc);
+  options_step.addOption(bool, "icc", b.option(bool, "icc", "Enable support for ICC") orelse build_jxl);
+  options_step.addOption(bool, "gain_map", b.option(bool, "gain_map", "Enable support for gain maps") orelse build_jxl);
   mod.addImport("config", options_step.createModule());
 
   const include_paths = b.option([]const []const u8, "include_paths", "the paths to include for the libjxl module")

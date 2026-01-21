@@ -44,7 +44,7 @@ pub fn init(options: InitOptions) !void {
   Decoder._version_value = Decoder._version();
 }
 
-pub const Cms = if (config.cms) struct {
+pub const Cms = struct {
   /// Represents an input or output colorspace to a color transform, as a serialized ICC profile.
   pub const ColorProfile = extern struct {
     /// The serialized ICC profile. This is guaranteed to be present and valid.
@@ -294,7 +294,7 @@ pub const Cms = if (config.cms) struct {
       };
     }
   };
-} else void;
+};
 
 pub const Codestream = struct {
   /// Image orientation metadata.
@@ -932,9 +932,7 @@ pub const Decoder = opaque {
   }
 
   /// Sets the color management system (CMS) that will be used for color conversion (if applicable) during decoding.
-  pub const setCms = if (config.cms) _setCms else null;
-
-  fn _setCms(dec: *@This(), cms: Cms.Interface) Status {
+  pub fn setCms(dec: *@This(), cms: Cms.Interface) Status {
     return @enumFromInt(c.JxlDecoderSetCms(@ptrCast(dec), @bitCast(cms)));
   }
 
@@ -1301,9 +1299,7 @@ pub const Encoder = opaque {
   }
 
   /// Sets the color management system (CMS) that will be used for color conversion (if applicable) during encoding.
-  pub const setCms = if (config.cms) _setCms else null;
-
-  fn _setCms(self: *@This(), cms: Cms.Interface) void {
+  pub fn setCms(self: *@This(), cms: Cms.Interface) void {
     c.JxlEncoderSetCms(@ptrCast(self), @bitCast(cms));
   }
 
@@ -1776,7 +1772,7 @@ pub const ColorEncoding = extern struct {
   }
 };
 
-pub const ICC = struct {
+pub const ICC = if (config.icc) struct {
   /// Allocates a buffer using the memory manager, fills it with a compressed
   /// representation of an ICC profile, returns the result through @c output_buffer
   /// and indicates its size through @c output_size.
@@ -1806,7 +1802,7 @@ pub const ICC = struct {
     if (c.JxlICCProfileDecode(@ptrCast(memory_manager), compressed_icc.ptr, compressed_icc.len, @ptrCast(&result.ptr), &result.len) == c.JXL_TRUE) return result;
     return error.Failed;
   }
-};
+} else void;
 
 /// Gain map bundle
 ///
@@ -1820,7 +1816,7 @@ pub const ICC = struct {
 /// is the caller's responsibility to ensure that the buffer remains valid and is
 /// not deallocated as long as these pointers are in use. The structure should be
 /// considered as providing a view into the buffer, not as an owner of the data.
-pub const GainMapBundle = extern struct {
+pub const GainMapBundle = if (config.gain_map) extern struct {
   /// Size of the gain map metadata in bytes.
   gain_map_metadata_size: u16,
   /// Pointer to the gain map metadata, which is a binary
@@ -1898,7 +1894,7 @@ pub const GainMapBundle = extern struct {
     if (c.JxlGainMapReadBundle(@ptrCast(self), input_buffer.ptr, input_buffer.len, &out) == c.JXL_TRUE) return out;
     return error.Failed;
   }
-};
+} else void;
 
 /// Memory Manager struct.
 /// These functions, when provided by the caller, will be used to handle memory
