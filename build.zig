@@ -180,6 +180,9 @@ pub fn createJxl(b: *std.Build) !*std.Build.Step.Compile {
     .linkage = .static,
   });
 
+  lib.addIncludePath(.{.cwd_relative = "/usr/include/"});
+  lib.linkLibCpp();
+
   lib.root_module.addCMacro("JXL_INTERNAL_LIBRARY_BUILD", "1");
   if (options.extensions.avx512f) lib.root_module.addCMacro("FJXL_ENABLE_AVX512", "1");
   if (options.extensions.avx2) lib.root_module.addCMacro("FJXL_ENABLE_AVX2", "1");
@@ -278,9 +281,6 @@ pub fn addSourcesProcedural(
 
 fn skcmsLib(b: *std.Build, lib: *std.Build.Step.Compile) !void {
   const dep = b.dependency("skcms", .{});
-  lib.addIncludePath(.{.cwd_relative = "/usr/include/"});
-  lib.addRPath(.{.cwd_relative = "/usr/lib/"});
-  lib.linkLibCpp();
   lib.addIncludePath(dep.path(""));
 
   if (options.extensions.avx512f and options.extensions.evex512) {
@@ -308,8 +308,6 @@ fn lcms2Lib(b: *std.Build, lib: *std.Build.Step.Compile) !void {
 /// Procedurally adds Google Highway (SIMD abstraction)
 fn highwayLib(b: *std.Build, lib: *std.Build.Step.Compile) !void {
   const dep = b.dependency("highway", .{});
-  lib.linkLibCpp();
-  lib.addIncludePath(.{.cwd_relative = "/usr/include/"});
   lib.root_module.addCMacro("HWY_STATIC_DEFINE", "1");
   lib.root_module.addCMacro("HWY_COMPILE_ALL_ATTRIBUTES", "1"); // use clang __attribute__ syntax
 
