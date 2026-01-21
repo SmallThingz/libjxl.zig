@@ -14,13 +14,13 @@ pub fn build(b: *std.Build) !void {
   });
 
   const options_step = b.addOptions();
-  options_step.addOption(bool, "extras", b.option(bool, "extras", "Build libjxl with extras (ICC and GainMap)") orelse false);
-  mod.addImport("config", options_step.createModule());
 
   if (build_jxl) {
+    options_step.addOption(bool, "extras", true);
     initCompilationOptions(b, target, optimize) catch @panic("OOM");
     mod.linkLibrary(try createJxl(b));
   } else {
+    options_step.addOption(bool, "extras", b.option(bool, "extras", "Build libjxl with extras (ICC and GainMap)") orelse false);
     const include_paths = b.option([]const []const u8, "include_paths", "the paths to include for the libjxl module")
       orelse if (build_jxl) &.{} else &[_][]const u8{"/usr/include/"};
     const r_paths = b.option([]const []const u8, "r_paths", "the paths to add to the rpath for the libjxl module")
@@ -34,6 +34,7 @@ pub fn build(b: *std.Build) !void {
     mod.linkSystemLibrary("jxl", .{});
   }
 
+  mod.addImport("config", options_step.createModule());
   addTestStep(b, mod, target, optimize) catch {};
 }
 
