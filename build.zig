@@ -167,7 +167,6 @@ pub fn createJxl(b: *std.Build) !*std.Build.Step.Compile {
     .root_module = b.createModule(.{
       .target = options.target,
       .optimize = options.optimize,
-      .single_threaded = !features.threading,
       .strip = options.strip,
       .unwind_tables = options.unwind_tables,
       .stack_protector = options.stack_protector,
@@ -259,7 +258,7 @@ pub fn addSourcesProcedural(
       if (std.mem.startsWith(u8, path, "extras/")) break :blk true;
 
       // Exclude threading code if threading is disabled
-      if (features.threading and std.mem.startsWith(u8, path, "threads/")) break :blk true;
+      if (features.threading and std.mem.indexOf(u8, path, "thread") != null) break :blk true;
 
       // Exclude main entry points for CLI tools
       const base = std.fs.path.basename(path);
