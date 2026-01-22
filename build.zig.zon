@@ -11,10 +11,12 @@
     .skcms = .{
       .url = "https://github.com/google/skcms/archive/42030a771244ba67f86b1c1c76a6493f873c5f91.tar.gz",
       .hash = "N-V-__8AACl_3wBCXmUUHdL79aHsRYdutGxHLwUcIuxEuY0w",
+      .lazy = true,
     },
     .lcms2 = .{
       .url = "https://github.com/mm2/Little-CMS/archive/65c63bf549d78253c14b30b3d62cb668bbbe612c.tar.gz",
       .hash = "N-V-__8AABpG-gDx3olvVwfvScKf8tSwZuH-FT9WaPHi4NIk",
+      .lazy = true,
     },
     .highway = .{
       .url = "https://github.com/google/highway/archive/457c891775a7397bdb0376bb1031e6e027af1c48.tar.gz",
