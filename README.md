@@ -4,7 +4,8 @@ An idiomatic Zig wrapper for [libjxl](https://github.com/libjxl/libjxl) (JPEG XL
 
 This library provides a type-safe, "Ziggy" interface to the JPEG XL reference implementation, featuring zero-cost abstractions and support for static linking.
 
-> [!IMPORTANT]  
+> [!IMPORTANT]
+> **Broken Upstream":** Building libjxl depends on [this fix](https://codeberg.org/ziglang/zig/issues/30907) being merged.<br/>
 > **Development Status:** Tested on linux onty, if any bugs arise on other platforms, please open an issue, or better yet, a PR.
 
 ## ✨ Features
