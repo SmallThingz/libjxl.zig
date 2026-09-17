@@ -1,37 +1,33 @@
 .{
-  .name = .jxl,
-  .version = "0.0.0",
-  .fingerprint = 0x19e349696409e8bb,
-  .minimum_zig_version = "0.15.0",
-  .dependencies = .{
-    .libjxl = .{
-      .url = "https://github.com/libjxl/libjxl/archive/refs/tags/v0.11.1.tar.gz",
-      .hash = "N-V-__8AAO_HbgBGkewsrsmQxPPUEzKNRtvZGlyafTky-zOf",
+    .name = .jxl,
+    .version = "0.0.0",
+    .fingerprint = 0x19e349696409e8bb,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .libjxl = .{
+            .url = "https://github.com/libjxl/libjxl/archive/refs/tags/v0.11.1.tar.gz",
+            .hash = "N-V-__8AAO_HbgBGkewsrsmQxPPUEzKNRtvZGlyafTky-zOf",
+        },
+        .skcms = .{
+            .url = "https://github.com/google/skcms/archive/42030a771244ba67f86b1c1c76a6493f873c5f91.tar.gz",
+            .hash = "N-V-__8AACl_3wBCXmUUHdL79aHsRYdutGxHLwUcIuxEuY0w",
+        },
+        .highway = .{
+            .url = "https://github.com/google/highway/archive/457c891775a7397bdb0376bb1031e6e027af1c48.tar.gz",
+            .hash = "N-V-__8AAODLaQBqNvEIfh_2K_DEv5Ivn1EgOsrbhetLQpvS",
+        },
+        .brotli = .{
+            .url = "https://github.com/google/brotli/archive/36533a866ed1ca4b75cf049f4521e4ec5fe24727.tar.gz",
+            .hash = "N-V-__8AAGLWIQAJB9dTQUQdQQD36bhBX5FpvFaoTYITY611",
+        },
     },
-    .skcms = .{
-      .url = "https://github.com/google/skcms/archive/42030a771244ba67f86b1c1c76a6493f873c5f91.tar.gz",
-      .hash = "N-V-__8AACl_3wBCXmUUHdL79aHsRYdutGxHLwUcIuxEuY0w",
-      .lazy = true,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "root.zig",
+        "sources.zig",
+        "examples",
+        "LICENSE",
+        "README.md",
     },
-    .lcms2 = .{
-      .url = "https://github.com/mm2/Little-CMS/archive/65c63bf549d78253c14b30b3d62cb668bbbe612c.tar.gz",
-      .hash = "N-V-__8AABpG-gDx3olvVwfvScKf8tSwZuH-FT9WaPHi4NIk",
-      .lazy = true,
-    },
-    .highway = .{
-      .url = "https://github.com/google/highway/archive/457c891775a7397bdb0376bb1031e6e027af1c48.tar.gz",
-      .hash = "N-V-__8AAODLaQBqNvEIfh_2K_DEv5Ivn1EgOsrbhetLQpvS",
-    },
-    .brotli = .{
-      .url = "https://github.com/google/brotli/archive/36533a866ed1ca4b75cf049f4521e4ec5fe24727.tar.gz",
-      .hash = "N-V-__8AAGLWIQAJB9dTQUQdQQD36bhBX5FpvFaoTYITY611",
-    },
-  },
-  .paths = .{
-    "build.zig",
-    "build.zig.zon",
-    "root.zig",
-    "LICENSE",
-    "README.md",
-  },
 }

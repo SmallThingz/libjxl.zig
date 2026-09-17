@@ -1,317 +1,65 @@
 const std = @import("std");
-const builtin = @import("builtin");
+const sources = @import("sources.zig");
 
-pub fn build(b: *std.Build) !void {
-  const target = b.standardTargetOptions(.{});
-  const optimize = b.standardOptimizeOption(.{});
-  const build_jxl = b.option(bool, "static_jxl", "Build libjxl from source (use static linking)") orelse true;
-
-  const mod = b.addModule("jxl", .{
-    .root_source_file = b.path("root.zig"),
-    .link_libc = true,
-    .target = target,
-    .optimize = optimize,
-  });
-
-  const config_step = b.addOptions();
-  initFeatures(b);
-  config_step.addOption(bool, "boxes", features.boxes);
-  config_step.addOption(bool, "threading", features.threading);
-  config_step.addOption(bool, "jpeg_transcode", features.jpeg_transcode);
-  config_step.addOption(bool, "3d_icc_tonemapping", features.@"3d_icc_tonemapping");
-  config_step.addOption(bool, "icc", b.option(bool, "icc", "Enable support for ICC") orelse build_jxl);
-  config_step.addOption(bool, "gain_map", b.option(bool, "gain_map", "Enable support for gain maps") orelse build_jxl);
-  mod.addImport("config", config_step.createModule());
-
-  const include_paths = b.option([]const []const u8, "include_paths", "the paths to include for the libjxl module")
-    orelse if (build_jxl) &.{} else &[_][]const u8{"/usr/include/"};
-  const r_paths = b.option([]const []const u8, "r_paths", "the paths to add to the rpath for the libjxl module")
-    orelse if (build_jxl) &.{} else  &[_][]const u8{"/usr/lib/"};
-
-  for (include_paths) |path| mod.addIncludePath(.{ .cwd_relative = path });
-  for (r_paths) |path| mod.addRPath(.{ .cwd_relative = path });
-
-  if (build_jxl) {
-    try initOptions(b, target, optimize);
-    mod.linkLibrary(try createJxl(b));
-  } else {
-    mod.linkSystemLibrary("jxl_cms", .{});
-    if (features.threading) mod.linkSystemLibrary("jxl_threads", .{});
-    mod.linkSystemLibrary("jxl", .{});
-  }
-
-  const test_step = b.step("test", "Run tests");
-  const test_runner_name = "test_runner.zig";
-
-  // we don't care about time-of-check time-of-use race conditions as this is a simple test runner
-  if (!exists(test_runner_name)) return; // error.MissingTestRunner;
-
-  for (&[_][]const u8{ "root.zig" }) |file| {
-    const tests = b.addTest(.{
-      .root_module = b.createModule(.{
-        .root_source_file = b.path(file),
+pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+    const simd = b.option(bool, "simd", "Enable Highway SIMD dispatch (requires compiler support)") orelse false;
+    const jxl = b.dependency("libjxl", .{});
+    const highway = b.dependency("highway", .{});
+    const brotli = b.dependency("brotli", .{});
+    const skcms = b.dependency("skcms", .{});
+    const generated = b.addWriteFiles();
+    _ = generated.add("jxl/jxl_export.h", "#define JXL_EXPORT\n#define JXL_NO_EXPORT\n#define JXL_DEPRECATED __attribute__((deprecated))\n#define JXL_DEPRECATED_EXPORT JXL_EXPORT JXL_DEPRECATED\n#define JXL_DEPRECATED_NO_EXPORT JXL_NO_EXPORT JXL_DEPRECATED\n");
+    _ = generated.add("jxl/jxl_threads_export.h", "#define JXL_THREADS_EXPORT\n#define JXL_THREADS_NO_EXPORT\n");
+    _ = generated.add("jxl/jxl_cms_export.h", "#define JXL_CMS_EXPORT\n#define JXL_CMS_NO_EXPORT\n");
+    const version = b.addConfigHeader(.{ .style = .{ .cmake = jxl.path("lib/jxl/version.h.in") }, .include_path = "jxl/version.h" }, .{
+        .JPEGXL_VERSION = "0.11.1",
+        .JPEGXL_MAJOR_VERSION = @as(u32, 0),
+        .JPEGXL_MINOR_VERSION = @as(u32, 11),
+        .JPEGXL_PATCH_VERSION = @as(u32, 1),
+        .JPEGXL_NUMERIC_VERSION = @as(u32, 0x000B01),
+    });
+    const native = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true, .link_libcpp = true });
+    native.addIncludePath(jxl.path(""));
+    native.addIncludePath(jxl.path("lib/include"));
+    native.addIncludePath(highway.path(""));
+    native.addIncludePath(brotli.path("c/include"));
+    native.addIncludePath(skcms.path(""));
+    native.addIncludePath(generated.getDirectory());
+    native.addConfigHeader(version);
+    native.addCMacro("JXL_STATIC_DEFINE", "1");
+    native.addCMacro("JXL_INTERNAL_LIBRARY_BUILD", "1");
+    native.addCMacro("JPEGXL_ENABLE_SKCMS", "1");
+    native.addCMacro("JPEGXL_ENABLE_LCMS2", "0");
+    native.addCMacro("JPEGXL_ENABLE_BOXES", "1");
+    native.addCMacro("JPEGXL_ENABLE_TRANSCODE_JPEG", "1");
+    native.addCMacro("JXL_THREADING", "1");
+    native.addCMacro("JXL_ENABLE_3D_ICC_TONEMAPPING", "1");
+    native.addCMacro("HWY_STATIC_DEFINE", "1");
+    if (!simd) native.addCMacro("HWY_COMPILE_ONLY_SCALAR", "1");
+    if (!simd) native.addCMacro("FJXL_ENABLE_AVX512", "0");
+    if (!simd) native.addCMacro("SKCMS_NO_RUNTIME_CPU_DETECTION", "1");
+    const cpp_flags = &.{ "-std=c++17", "-fno-exceptions", "-fno-rtti" };
+    native.addCSourceFiles(.{ .root = jxl.path(""), .files = sources.jxl, .flags = cpp_flags });
+    native.addCSourceFiles(.{ .root = highway.path(""), .files = &.{ "hwy/abort.cc", "hwy/aligned_allocator.cc", "hwy/per_target.cc", "hwy/targets.cc" }, .flags = cpp_flags });
+    native.addCSourceFiles(.{ .root = skcms.path(""), .files = &.{"skcms.cc"}, .flags = cpp_flags });
+    native.addCSourceFiles(.{ .root = brotli.path(""), .files = sources.brotli, .flags = &.{"-std=c11"} });
+    const lib = b.addLibrary(.{ .name = "jxl", .linkage = .static, .root_module = native });
+    b.installArtifact(lib);
+    const mod = b.addModule("jxl", .{ .root_source_file = b.path("root.zig"), .target = target, .optimize = optimize });
+    mod.addIncludePath(jxl.path("lib/include"));
+    mod.addIncludePath(generated.getDirectory());
+    mod.addConfigHeader(version);
+    mod.linkLibrary(lib);
+    const tests = b.addTest(.{ .root_module = mod, .use_llvm = true, .use_lld = target.result.ofmt != .macho });
+    b.step("test", "Run codec and ownership tests").dependOn(&b.addRunArtifact(tests).step);
+    b.step("test-build", "Compile tests without executing target code").dependOn(&tests.step);
+    const example = b.addExecutable(.{ .name = "roundtrip", .use_llvm = true, .use_lld = target.result.ofmt != .macho, .root_module = b.createModule(.{
+        .root_source_file = b.path("examples/roundtrip.zig"),
         .target = target,
         .optimize = optimize,
-      }),
-      .test_runner = .{
-        .path = b.path(test_runner_name),
-        .mode = .simple,
-      }
-    });
-
-    tests.root_module.addImport("config", config_step.createModule());
-
-    tests.root_module.addImport("jxl", mod);
-    const run_tests = b.addRunArtifact(tests);
-    test_step.dependOn(&run_tests.step);
-  }
-}
-
-fn exists(path: []const u8) bool {
-  std.fs.cwd().access(path, .{}) catch return false;
-  return true;
-}
-
-const Features = struct {
-  pub const Cms = enum { skcms, lcms2 };
-  cms: Cms,
-  boxes: bool,
-  threading: bool,
-  jpeg_transcode: bool,
-  // jpeg_lib: bool,
-  @"3d_icc_tonemapping": bool,
-};
-
-var features: Features = undefined;
-
-fn initFeatures(b: *std.Build) void {
-  const threading = b.option(bool, "threading", "Enable Threading support") orelse true;
-  features = .{
-    .cms = b.option(Features.Cms, "cms", "Enable Color Management System") orelse .skcms,
-    .boxes = b.option(bool, "boxes", "Enable support for the JXL container format (ISOBMFF \"boxes\")") orelse true,
-    .threading = threading,
-    .jpeg_transcode = b.option(bool, "jpeg_transcode", "Enable JPEG transcoding support") orelse true,
-    // .jpeg_lib = b.option(bool, "jpeg_lib", "Builds the Jpegli library, a higher-performance JPEG encoder/decoder included in the JXL project") orelse true,
-    .@"3d_icc_tonemapping" = b.option(bool, "3d_icc_tonemapping", "Enable 3D ICC tonemapping support, Essential for high-quality HDR-to-SDR conversion.") orelse true,
-  };
-}
-
-const Options = struct {
-  target: std.Build.ResolvedTarget,
-  optimize: std.builtin.OptimizeMode,
-  c_flags: []const []const u8 = &[_][]const u8{ "-std=c11" },
-  cxx_flags: []const []const u8 = &[_][]const u8{ "-std=c++20", "-fno-rtti", "-fno-omit-frame-pointer", "-fno-exceptions" },
-  extensions: struct {
-    sse4_2: bool,
-    sse4_1: bool,
-    avx2: bool,
-    fma: bool,
-    bmi: bool,
-    bmi2: bool,
-    avx512f: bool,
-    avx512vl: bool,
-    avx512bw: bool,
-    avx512dq: bool,
-    evex512: bool,
-  },
-  strip: bool,
-  unwind_tables: std.builtin.UnwindTables,
-  stack_protector: bool,
-  stack_check: bool,
-  red_zone: bool,
-  omit_frame_pointer: bool,
-  error_tracing: bool,
-};
-var options: Options = undefined;
-
-const Feature = std.Target.x86.Feature;
-
-fn initOptions(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) !void {
-  options = .{
-    .target = target,
-    .optimize = optimize,
-    .extensions = undefined,
-    .strip = b.option(bool, "lib_strip", "Strip symbols. Wrapper option is handled saperately") orelse (optimize != .Debug),
-    .unwind_tables = b.option(std.builtin.UnwindTables, "lib_unwind_tables", "Unwind tables. Wrapper option is handled saperately") orelse .none,
-    .stack_protector = b.option(bool, "lib_stack_protector", "Enable stack protection. Wrapper option is handled saperately") orelse false,
-    .stack_check = b.option(bool, "lib_stack_check", "Enable stack check. Wrapper option is handled saperately") orelse (optimize == .Debug),
-    .red_zone = b.option(bool, "lib_red_zone", "Enable red zone (saves instructions). Wrapper option is handled saperately") orelse true,
-    .omit_frame_pointer = b.option(bool, "lib_omit_frame_pointer", "Enable omit frame pointer. Wrapper option is handled saperately") orelse true,
-    .error_tracing = b.option(bool, "lib_error_tracing", "Enable error tracing. Wrapper option is handled saperately") orelse (optimize == .Debug),
-  };
-
-  options.extensions = .{
-    .sse4_2 = target.result.cpu.has(.x86, .sse4_2),
-    .sse4_1 = target.result.cpu.has(.x86, .sse4_1),
-    .avx2 = target.result.cpu.has(.x86, .avx2),
-    .fma = target.result.cpu.has(.x86, .fma),
-    .bmi = target.result.cpu.has(.x86, .bmi),
-    .bmi2 = target.result.cpu.has(.x86, .bmi2),
-    .avx512f = target.result.cpu.has(.x86, .avx512f),
-    .avx512vl = target.result.cpu.has(.x86, .avx512vl),
-    .avx512bw = target.result.cpu.has(.x86, .avx512bw),
-    .avx512dq = target.result.cpu.has(.x86, .avx512dq),
-    .evex512 = target.result.cpu.has(.x86, .evex512),
-  };
-}
-
-pub fn createJxl(b: *std.Build) !*std.Build.Step.Compile {
-  const jxl_dep = b.dependency("libjxl", .{});
-  const lib = b.addLibrary(.{
-    .name = "jxl",
-    .root_module = b.createModule(.{
-      .target = options.target,
-      .optimize = options.optimize,
-      .strip = options.strip,
-      .unwind_tables = options.unwind_tables,
-      .stack_protector = options.stack_protector,
-      .stack_check = options.stack_check,
-      .red_zone = options.red_zone,
-      .omit_frame_pointer = options.omit_frame_pointer,
-      .error_tracing = options.error_tracing,
-      .link_libc = true,
-    }),
-    .linkage = .static,
-  });
-
-  lib.addIncludePath(.{.cwd_relative = "/usr/include/"});
-  lib.linkLibCpp();
-
-  lib.root_module.addCMacro("JXL_INTERNAL_LIBRARY_BUILD", "1");
-  if (options.extensions.avx512f) lib.root_module.addCMacro("FJXL_ENABLE_AVX512", "1");
-  if (options.extensions.avx2) lib.root_module.addCMacro("FJXL_ENABLE_AVX2", "1");
-  if (options.extensions.sse4_1) lib.root_module.addCMacro("FJXL_ENABLE_SSE4", "1");
-
-  lib.root_module.addCMacro("JPEGXL_ENABLE_SKCMS", if (features.cms == .skcms) "1" else "0");
-  lib.root_module.addCMacro("JPEGXL_ENABLE_LCMS2", if (features.cms == .lcms2) "1" else "0");
-  switch (features.cms) {
-    .skcms => try skcmsLib(b, lib),
-    .lcms2 => try lcms2Lib(b, lib),
-  }
-  lib.root_module.addCMacro("JPEGXL_ENABLE_BOXES", if (features.boxes) "1" else "0");
-  lib.root_module.addCMacro("JXL_THREADING", if (features.threading) "1" else "0");
-  lib.root_module.addCMacro("JPEGXL_ENABLE_TRANSCODE_JPEG", if (features.jpeg_transcode) "1" else "0");
-  // lib.root_module.addCMacro("JPEGXL_ENABLE_JPEGLI_LIBJPEG", if (features.jpeg_lib) "1" else "0");
-  lib.root_module.addCMacro("JXL_ENABLE_3D_ICC_TONEMAPPING", if (features.@"3d_icc_tonemapping") "1" else "0");
-  // lib.root_module.addCMacro("JPEGXL_ENABLE_TCMALLOC", if (features.jpegxl_tcmalloc) "1" else "0");
-
-  lib.addConfigHeader(b.addConfigHeader(.{
-    .style = .{ .cmake = jxl_dep.path("lib/jxl/version.h.in") },
-    .include_path = "lib/jxl/version.h",
-  }, .{
-    .JPEGXL_VERSION = "0.11.1",
-    .JPEGXL_MAJOR_VERSION = @as(u32, 0),
-    .JPEGXL_MINOR_VERSION = @as(u32, 11),
-    .JPEGXL_PATCH_VERSION = @as(u32, 1),
-    .JPEGXL_NUMERIC_VERSION = @as(u32, 0x000B01),
-  }));
-
-  lib.addIncludePath(jxl_dep.path("")); 
-  lib.addIncludePath(jxl_dep.path("include"));
-  try addSourcesProcedural(b, lib, jxl_dep.path(""));
-
-  try highwayLib(b, lib);
-  try brotliLib(b, lib);
-
-  return lib;
-}
-
-/// tests, benchmarks, and other non-library artifacts.
-pub fn addSourcesProcedural(
-  b: *std.Build,
-  lib: *std.Build.Step.Compile,
-  root_lazy: std.Build.LazyPath,
-) !void {
-  const search_root_abs = root_lazy.getPath2(b, &lib.step);
-
-  var dir = try std.fs.cwd().openDir(search_root_abs, .{ .iterate = true });
-  var walker = try dir.walk(b.allocator);
-  defer walker.deinit();
-
-  while (try walker.next()) |entry| {
-    if (entry.kind != .file) continue;
-
-    const path = entry.path;
-    const ext = std.fs.path.extension(path);
-
-    const is_c = std.mem.eql(u8, ext, ".c");
-    const is_cpp = std.mem.eql(u8, ext, ".cpp") or std.mem.eql(u8, ext, ".cc");
-    const is_source = is_c or is_cpp;
-    if (!is_source) continue;
-
-    // Skips tests, benchmarks, fuzzers, and CLI-only tools.
-    const is_excluded = blk: {
-      if (std.mem.indexOf(u8, path, "test") != null) break :blk true;
-      if (std.mem.indexOf(u8, path, "benchmark") != null) break :blk true;
-      if (std.mem.indexOf(u8, path, "bench_") != null) break :blk true;
-      if (std.mem.indexOf(u8, path, "gbench") != null) break :blk true;
-      if (std.mem.indexOf(u8, path, "fuzz") != null) break :blk true;
-      if (std.mem.indexOf(u8, path, "nothing.cc") != null) break :blk true;
-      if (std.mem.startsWith(u8, path, "plugins/")) break :blk true;
-      if (std.mem.startsWith(u8, path, "tools/")) break :blk true;
-      if (std.mem.startsWith(u8, path, "jpegli/")) break :blk true;
-      if (std.mem.startsWith(u8, path, "extras/")) break :blk true;
-
-      // Exclude threading code if threading is disabled
-      if (!features.threading and std.mem.indexOf(u8, path, "thread") != null) break :blk true;
-
-      // Exclude main entry points for CLI tools
-      const base = std.fs.path.basename(path);
-      if (std.mem.eql(u8, base, "brotli.c")) break :blk true;
-      if (std.mem.eql(u8, base, "cjxl_main.cc")) break :blk true;
-      if (std.mem.eql(u8, base, "djxl_main.cc")) break :blk true;
-
-      break :blk false;
-    };
-
-    if (is_excluded) continue;
-
-    lib.addCSourceFile(.{
-      .file = root_lazy.path(b, path),
-      .flags = if (is_c) options.c_flags else options.cxx_flags,
-    });
-  }
-}
-
-fn skcmsLib(b: *std.Build, lib: *std.Build.Step.Compile) !void {
-  const dep = b.dependency("skcms", .{});
-  lib.addIncludePath(dep.path(""));
-
-  if (options.extensions.avx512f and options.extensions.evex512) {
-    lib.root_module.addCMacro("SKCMS_FORCE_AVX512", "1");
-  }
-  if (options.extensions.avx2 and options.extensions.fma and options.extensions.bmi2) {
-    lib.root_module.addCMacro("SKCMS_FORCE_HSW", "1"); // "HSW" (Haswell) is the skcms target for AVX2 + FMA + BMI2
-  }
-  if (options.extensions.avx2) {
-    lib.root_module.addCMacro("SKCMS_FORCE_AVX2", "1");
-  }
-
-  lib.addCSourceFile(.{.file = dep.path("skcms.cc"), .flags = options.cxx_flags});
-}
-
-fn lcms2Lib(b: *std.Build, lib: *std.Build.Step.Compile) !void {
-  const dep = b.dependency("lcms2", .{});
-  lib.addIncludePath(dep.path("include"));
-  // Modern compilers (C++17/C11) deprecate the 'register' keyword.
-  // LCMS2 is an older codebase, so we disable that keyword to prevent errors.
-  lib.root_module.addCMacro("CMS_NO_REGISTER_KEYWORD", "1");
-  try addSourcesProcedural(b, lib, dep.path("src"));
-}
-
-/// Procedurally adds Google Highway (SIMD abstraction)
-fn highwayLib(b: *std.Build, lib: *std.Build.Step.Compile) !void {
-  const dep = b.dependency("highway", .{});
-  lib.root_module.addCMacro("HWY_STATIC_DEFINE", "1");
-  lib.root_module.addCMacro("HWY_COMPILE_ALL_ATTRIBUTES", "1"); // use clang __attribute__ syntax
-
-  lib.addIncludePath(dep.path(""));
-  try addSourcesProcedural(b, lib, dep.path("hwy"));
-}
-
-/// Procedurally adds Brotli (Entropy coding)
-fn brotliLib(b: *std.Build, lib: *std.Build.Step.Compile) !void {
-  const dep = b.dependency("brotli", .{});
-  lib.addIncludePath(dep.path("c/include"));
-  try addSourcesProcedural(b, lib, dep.path("c"));
+    }) });
+    example.root_module.addImport("jxl", mod);
+    b.step("example", "Run the in-memory image round trip").dependOn(&b.addRunArtifact(example).step);
 }

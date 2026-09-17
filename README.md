@@ -1,125 +1,93 @@
-# libjxl-zig
+# JPEG XL for Zig
 
-An idiomatic Zig wrapper for [libjxl](https://github.com/libjxl/libjxl) (JPEG XL).
-
-This library provides a type-safe, "Ziggy" interface to the JPEG XL reference implementation, featuring zero-cost abstractions and support for static linking.
-
-> [!IMPORTANT]
-> **Broken Upstream":** Building libjxl depends on [this fix](https://codeberg.org/ziglang/zig/issues/30907) being merged.<br/>
-> **Development Status:** Tested on linux onty, if any bugs arise on other platforms, please open an issue, or better yet, a PR.
-
-## ✨ Features
-
-* **Type-Safe Callbacks:** Move away from `void*` nightmare. Use `fromContext` to pass Zig structs directly into decoder/CMS callbacks with full type safety.
-* **Struct Layout Verification:** Uses tests to verify that Zig struct layouts perfectly match the underlying C library headers.
-* **Flexible CMS:** Built-in support for linking `skcms` or `lcms2`, or providing your own implementation via a clean interface.
-
-## 📦 Installation
-
-Add this to your `build.zig.zon`:
-
-```zig
-.{
-  .dependencies = .{
-    .jxl = .{
-      .url = "https://github.com/SmallThingz/libjxl.zig/archive/<commit-hash>.tar.gz",
-      .hash = "...",
-    },
-  },
-}
-
-```
-
-## 🚀 Quick Start: Decoding
+Zig **0.16.0** image encoding and decoding, backed by libjxl **0.11.1**.
+The native `std.Build` graph compiles pinned libjxl, Highway, skcms and Brotli
+sources directly. It does not invoke CMake, Python, shell build scripts, or a
+system libjxl installation.
 
 ```zig
 const jxl = @import("jxl");
 
-pub fn main() !void {
-  // Initialize global defaults (BasicInfo, BlendInfo, etc.)
-  try jxl.init(.{}); // Deinitialization not needed
+const bytes = try jxl.encode(allocator, .{
+    .width = 2,
+    .height = 1,
+    .format = .rgb,
+    .pixels = &.{ 255, 0, 0, 0, 255, 0 },
+}, .{});
+defer allocator.free(bytes);
 
-  const decoder = jxl.Decoder.create(null);
-  defer decoder.destroy();
-
-  // Set up a custom pixel handler
-  const MyHandler = struct {
-    pub fn onImageOut(self: *@This(), x: usize, y: usize, num: usize, pixels: ?*const anyopaque) void {
-      // Process pixels...
-    }
-  };
-
-  var handler = MyHandler{};
-  const listener = jxl.ImageOutListener.fromContext(&handler);
-  
-  _ = decoder.setImageOutCallback(&format, listener);
-  
-  // Feed data and process...
-}
-
+var image = try jxl.decode(allocator, bytes, .{});
+defer image.deinit();
+// image.pixels contains packed 8-bit sRGB pixels.
 ```
 
-## 🛠 Build Configuration
+`ImageView` borrows its pixel slice for the duration of `encode`. The encoded
+slice belongs to the caller. `decode` returns an owning `Image`; do not duplicate
+its ownership, and call `deinit` exactly once. The allocator must outlive the
+returned allocation. The codec's custom allocation hooks use that allocator;
+upstream C++ containers may also use the system allocator. Calls
+have no global initialization or mutable wrapper state.
 
-The wrapper supports several build-time options to satisfy `libjxl` dependencies without system-wide installs.
+Supported formats are `.gray`, `.gray_alpha`, `.rgb`, and `.rgba`, with straight
+alpha. Encoding defaults to exact lossless pixels. Set `distance` to a positive
+value for lossy compression, `effort` from 1 through 9, and `container = true`
+for the JPEG XL container rather than a bare codestream.
 
-| Option | Values | Description |
-| --- | --- | --- |
-| **`static_jxl`** | `bool` (default: `true`) | Build `libjxl` from source (static). If `false`, links to system libs. |
-| **`cms`** | `skcms`, `lcms2` | Choose the Color Management System. |
-| **`threading`** | `bool` (default: `true`) | Enable multi-threading support. |
-| **`boxes`** | `bool` (default: `true`) | Enable JXL container format (ISOBMFF "boxes"). |
-| **`jpeg_transcode`** | `bool` (default: `true`) | Enable lossless JPEG to JXL transcoding. |
-| **`3d_icc_tonemapping`** | `bool` (default: `true`) | Enable 3D ICC tonemapping for HDR-to-SDR conversion. |
-| **`icc`** | `bool` | Enable support for ICC profiles. |
-| **`gain_map`** | `bool` | Enable support for HDR gain maps. |
-| **`include_paths`** | `[]const []const u8` | Custom header search paths for system linking. |
-| **`r_paths`** | `[]const []const u8` | Custom runtime library search paths for system linking. |
+Decoding produces 8-bit sRGB and applies the encoded orientation. Higher bit
+depths and wider color gamuts are converted to that output representation.
+Animation and non-alpha extra channels return `UnsupportedImage`. Metadata boxes
+are not returned. `max_bytes` limits the decoded pixel buffer (default 256 MiB),
+not total codec working memory. A bounded allocator limits allocations routed
+through the hooks, but cannot impose a process-wide memory budget.
+Malformed data, premature EOF, invalid dimensions/options and allocation failures
+return Zig errors. Advanced users may access `jxl.raw` with upstream C ownership
+rules; the normal image API does not require raw handles or pointers.
 
-*These options specifically affect the C/C++ library compilation.*
-| Option | Values | Description |
-| --- | --- | --- |
-| **`lib_strip`** | `bool` | Strip symbols from the library binary. |
-| **`lib_unwind_tables`** | `none`, `sync`, `async` | Control stack unwind table generation. |
-| **`lib_stack_protector`** | `bool` | Enable stack smashing protection. |
-| **`lib_stack_check`** | `bool` | Enable stack limit checking. |
-| **`lib_red_zone`** | `bool` (default: `true`) | Enable the "red zone" optimization. |
-| **`lib_omit_frame_pointer`** | `bool` (default: `true`) | Omit the frame pointer for a performance boost. |
-| **`lib_error_tracing`** | `bool` | Enable internal error tracing (useful for debugging). |
+## Build and use
 
----
-
-**Would you like me to show you how to set up the `build.zig.zon` file so Zig can automatically download the `libjxl` and `highway` dependencies?**
-
-
-## 🧩 Advanced: Custom CMS Interface
-
-You can satisfy the JPEG XL requirements with a custom Zig struct by implementing the `Cms.Interface`.
+Add this package with `zig fetch --save=jxl <package-url>` and import its module:
 
 ```zig
-const MyCMS = struct {
-  pub fn init(self: *@This(), num_threads: usize, max_pixels: usize) ?*anyopaque { 
-    return self; 
-  }
-  pub fn run(self: *@This(), ...) bool { 
-    return true; 
-  }
-};
-
-const interface = jxl.Cms.Interface.fromContext(&my_cms_instance);
-decoder.setCms(interface);
-
+const dependency = b.dependency("jxl", .{
+    .target = target,
+    .optimize = optimize,
+});
+exe.root_module.addImport("jxl", dependency.module("jxl"));
 ```
 
-## ⚠️ Important Notes
+```sh
+zig build test -j2
+zig build example -j2
+zig build test -Doptimize=ReleaseSafe -j2
+zig build test-build -Dtarget=aarch64-linux-gnu -j2
+```
 
-* **Initialization:** You **must** call `jxl.init({})` before accessing `.default()` methods on configuration structs, as these are populated from the C library at runtime.
+`test-build` compiles without executing target code. Foreign-target compilation
+alone does not establish runtime compatibility. `zig build` installs the static
+native library; Zig consumers should use the `jxl` module so headers, native
+linking and generated configuration propagate automatically.
 
-## Contributing
+The default `-Dsimd=false` uses scalar Highway, disables AVX-512 fast encoding,
+and uses the target baseline for skcms. This avoids Zig/Clang issue
+[30907](https://codeberg.org/ziglang/zig/issues/30907) without requiring AVX-512
+hardware. Compiler-selected baseline instructions still follow `-Dcpu`.
+`-Dsimd=true` enables upstream SIMD dispatch. On affected x86 compilers, qualify
+that configuration with an explicit `+evex512` CPU feature, for example:
 
-Contributions are welcome! Feel free to open a bug report or a Pull Request. Just keep the following in mind:
-- **Indentation**: 2 spaces.
+```sh
+zig build test-build -Dsimd=true -Dcpu=baseline+avx512f+avx512bw+avx512dq+avx512vl+evex512 -j2
+```
 
-## License
+That is a compile-only check. Do not run the resulting executable on hardware
+that lacks the requested features. No SIMD performance claim is made here.
 
-This project is licensed under the MIT License. Reference the ONNX Runtime license for the underlying C library.
+## API migration
+
+This replaces the old C-shaped wrapper: global `init`, mirrored C structures,
+and handle-based `Encoder`/`Decoder` methods are removed. Use `encode`, `decode`,
+`ImageView`, and `Image` for still images; use the explicitly named `raw` escape
+hatch for upstream features outside that API. The old build feature switches
+are replaced by a single pinned native configuration and the `simd` option.
+
+The wrapper uses the repository LICENSE. Native dependencies retain their own
+licenses in their fetched source packages.
