@@ -157,14 +157,15 @@ pub fn decode(allocator: std.mem.Allocator, input: []const u8, options: DecodeOp
     var memory: Memory = .{ .allocator = allocator };
     const manager = memory.manager();
     const dec = raw.JxlDecoderCreate(&manager) orelse return error.OutOfMemory;
+    var result: ?Image = null;
+    errdefer if (result) |*image| image.deinit();
+    // Destroy the decoder before releasing its borrowed output buffer on error.
     defer raw.JxlDecoderDestroy(dec);
     if (raw.JxlDecoderSetCms(dec, raw.JxlGetDefaultCms().*) != raw.JXL_DEC_SUCCESS) return memory.decodeError();
     if (raw.JxlDecoderSetUnpremultiplyAlpha(dec, raw.JXL_TRUE) != raw.JXL_DEC_SUCCESS) return memory.decodeError();
     if (raw.JxlDecoderSubscribeEvents(dec, raw.JXL_DEC_BASIC_INFO | raw.JXL_DEC_COLOR_ENCODING | raw.JXL_DEC_FULL_IMAGE) != raw.JXL_DEC_SUCCESS or
         raw.JxlDecoderSetInput(dec, input.ptr, input.len) != raw.JXL_DEC_SUCCESS) return memory.decodeError();
     // Keep input open so premature EOF is distinguishable from corrupt data.
-    var result: ?Image = null;
-    errdefer if (result) |*image| image.deinit();
     var complete = false;
     var original_profile = false;
     while (true) switch (raw.JxlDecoderProcessInput(dec)) {
@@ -176,7 +177,8 @@ pub fn decode(allocator: std.mem.Allocator, input: []const u8, options: DecodeOp
             const format: PixelFormat = @enumFromInt(info.num_color_channels + @as(u32, if (info.alpha_bits > 0) 1 else 0));
             const size = try pixelBytes(info.xsize, info.ysize, format);
             if (size > options.max_bytes) return error.ImageTooLarge;
-            result = .{ .width = info.xsize, .height = info.ysize, .format = format, .pixels = try allocator.alloc(u8, size), .allocator = allocator };
+            const pixels = try allocator.alloc(u8, size);
+            result = .{ .width = info.xsize, .height = info.ysize, .format = format, .pixels = pixels, .allocator = allocator };
         },
         raw.JXL_DEC_COLOR_ENCODING => {
             const image = result orelse return error.InvalidData;
