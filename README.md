@@ -34,9 +34,13 @@ value for lossy compression, `effort` from 1 through 9, and `container = true`
 for the JPEG XL container rather than a bare codestream.
 
 Decoding produces 8-bit sRGB and applies the encoded orientation. Higher bit
-depths and wider color gamuts are converted to that output representation.
+depths are quantized to that output representation. Original-profile (non-XYB)
+images must have structured sRGB color metadata; other original profiles,
+including opaque ICC profiles, return `UnsupportedColorProfile` because libjxl
+0.11.1 does not reliably convert those samples to the requested output profile.
 Animation and non-alpha extra channels return `UnsupportedImage`. Metadata boxes
-are not returned. `max_bytes` limits the decoded pixel buffer (default 256 MiB),
+are not returned; trailing metadata after the image payload is not validated.
+`max_bytes` limits the decoded pixel buffer (default 256 MiB),
 not total codec working memory. A bounded allocator limits allocations routed
 through the hooks, but cannot impose a process-wide memory budget.
 Malformed data, premature EOF, invalid dimensions/options and allocation failures
