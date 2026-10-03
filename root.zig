@@ -1,11 +1,7 @@
 //! Allocator-owned JPEG XL still images. No global initialization is required.
 const std = @import("std");
 /// Advanced upstream API. Raw handles obey upstream ownership rules.
-pub const raw = @cImport({
-    @cInclude("jxl/encode.h");
-    @cInclude("jxl/decode.h");
-    @cInclude("jxl/cms.h");
-});
+pub const raw = @import("jxl_c");
 
 pub const PixelFormat = enum(u3) {
     gray = 1,
@@ -13,10 +9,10 @@ pub const PixelFormat = enum(u3) {
     rgb = 3,
     rgba = 4,
     pub fn channels(self: PixelFormat) usize {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
     fn cFormat(self: PixelFormat) raw.JxlPixelFormat {
-        return .{ .num_channels = @intFromEnum(self), .data_type = raw.JXL_TYPE_UINT8, .endianness = raw.JXL_NATIVE_ENDIAN, .@"align" = 0 };
+        return .{ .num_channels = @backingInt(self), .data_type = raw.JXL_TYPE_UINT8, .endianness = raw.JXL_NATIVE_ENDIAN, .@"align" = 0 };
     }
 };
 
@@ -174,7 +170,7 @@ pub fn decode(allocator: std.mem.Allocator, input: []const u8, options: DecodeOp
             if (raw.JxlDecoderGetBasicInfo(dec, &info) != raw.JXL_DEC_SUCCESS) return memory.decodeError();
             original_profile = info.uses_original_profile != 0;
             if (info.have_animation != 0 or (info.num_color_channels != 1 and info.num_color_channels != 3) or info.num_extra_channels != @as(u32, if (info.alpha_bits > 0) 1 else 0)) return error.UnsupportedImage;
-            const format: PixelFormat = @enumFromInt(info.num_color_channels + @as(u32, if (info.alpha_bits > 0) 1 else 0));
+            const format: PixelFormat = @fromBackingInt(@intCast(info.num_color_channels + @as(u32, if (info.alpha_bits > 0) 1 else 0)));
             const size = try pixelBytes(info.xsize, info.ysize, format);
             if (size > options.max_bytes) return error.ImageTooLarge;
             const pixels = try allocator.alloc(u8, size);

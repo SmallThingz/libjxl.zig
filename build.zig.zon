@@ -2,7 +2,7 @@
     .name = .jxl,
     .version = "0.0.0",
     .fingerprint = 0x19e349696409e8bb,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .libjxl = .{
             .url = "https://github.com/libjxl/libjxl/archive/refs/tags/v0.11.1.tar.gz",
