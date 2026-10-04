@@ -14,11 +14,9 @@ pub fn build(b: *std.Build) void {
     _ = generated.add("jxl/jxl_threads_export.h", "#define JXL_THREADS_EXPORT\n#define JXL_THREADS_NO_EXPORT\n");
     _ = generated.add("jxl/jxl_cms_export.h", "#define JXL_CMS_EXPORT\n#define JXL_CMS_NO_EXPORT\n");
     const version = b.addConfigHeader(.{ .style = .{ .cmake = jxl.path("lib/jxl/version.h.in") }, .include_path = "jxl/version.h" }, .{
-        .JPEGXL_VERSION = "0.11.1",
         .JPEGXL_MAJOR_VERSION = @as(u32, 0),
         .JPEGXL_MINOR_VERSION = @as(u32, 11),
         .JPEGXL_PATCH_VERSION = @as(u32, 1),
-        .JPEGXL_NUMERIC_VERSION = @as(u32, 0x000B01),
     });
     const native = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true, .link_libcpp = true });
     native.addIncludePath(jxl.path(""));
@@ -52,6 +50,25 @@ pub fn build(b: *std.Build) void {
     mod.addIncludePath(generated.getDirectory());
     mod.addConfigHeader(version);
     mod.linkLibrary(lib);
+    const bindings = b.addTranslateC(.{
+        .root_source_file = generated.add("jxl.h", "#include <jxl/encode.h>\n#include <jxl/decode.h>\n#include <jxl/cms.h>\n"),
+        .target = target,
+        .optimize = optimize,
+    });
+    bindings.addIncludePath(jxl.path("lib/include"));
+    bindings.addIncludePath(generated.getDirectory());
+    bindings.addConfigHeader(version);
+    mod.addImport("jxl_c", bindings.createModule());
+    b.step("bindings", "Generate Zig declarations from the pinned C headers").dependOn(&bindings.step);
+    const check_module = b.createModule(.{
+        .root_source_file = b.path("root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "jxl_c", .module = bindings.createModule() }},
+    });
+    const wrapper_check = b.addTest(.{ .root_module = check_module, .use_llvm = true });
+    b.step("check", "Type-check the wrapper and tests without building native libraries").dependOn(&wrapper_check.step);
     const tests = b.addTest(.{ .root_module = mod, .use_llvm = true, .use_lld = target.result.ofmt != .macho });
     b.step("test", "Run codec and ownership tests").dependOn(&b.addRunArtifact(tests).step);
     b.step("test-build", "Compile tests without executing target code").dependOn(&tests.step);

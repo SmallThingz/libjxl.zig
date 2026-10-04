@@ -1,6 +1,6 @@
 # JPEG XL for Zig
 
-Zig **0.16.0** image encoding and decoding, backed by libjxl **0.11.1**.
+Zig **0.17.0** image encoding and decoding, backed by libjxl **0.11.1**.
 The native `std.Build` graph compiles pinned libjxl, Highway, skcms and Brotli
 sources directly. It does not invoke CMake, Python, shell build scripts, or a
 system libjxl installation.
@@ -60,9 +60,10 @@ exe.root_module.addImport("jxl", dependency.module("jxl"));
 ```
 
 ```sh
+zig build check -j1
 zig build test -j2
 zig build example -j2
-zig build test -Doptimize=ReleaseSafe -j2
+zig build test -Doptimize=safe -j2
 zig build test-build -Dtarget=aarch64-linux-gnu -j2
 ```
 
@@ -70,6 +71,10 @@ zig build test-build -Dtarget=aarch64-linux-gnu -j2
 alone does not establish runtime compatibility. `zig build` installs the static
 native library; Zig consumers should use the `jxl` module so headers, native
 linking and generated configuration propagate automatically.
+
+`check` type-checks the wrapper and its tests without compiling or linking the
+native C++ libraries. `bindings` only generates the C declarations. Neither is a
+substitute for the linked codec tests.
 
 The default `-Dsimd=false` uses scalar Highway, disables AVX-512 fast encoding,
 and uses the target baseline for skcms. This avoids Zig/Clang issue
